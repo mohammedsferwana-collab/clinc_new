@@ -8,6 +8,7 @@ import { renderImport } from './import.js';
 import { renderEmployees } from './employees.js';
 import { renderAttendance } from './attendance.js';
 import { renderAssets } from './assets.js';
+import { renderBackup } from './backup.js';
 import { loadSettings, applyTheme, setMode, currentMode, MODE_LABEL } from './theme.js';
 
 const cfg = window.CLINIC_CONFIG || {};
@@ -42,6 +43,7 @@ const NAV = [
   ['assets', 'العهد', renderAssets, ['admin']],
   ['import', 'استيراد من إكسل', renderImport, ['admin']],
   ['settings', 'الإعدادات', renderSettings, ['admin']],
+  ['backup', 'النسخ الاحتياطي', renderBackup, ['admin']],
 ];
 
 ctx.loadLookups = async () => {
@@ -55,13 +57,32 @@ ctx.loadLookups = async () => {
 
 function showLogin(msg = '') {
   app.innerHTML = `<form class="login" id="lf">${ctx.settings.logo_url ? `<img class="logo" src="${esc(ctx.settings.logo_url)}" alt="">` : ''}<h1>${esc(ctx.settings.site_name)}</h1>
-    <label for="em">البريد الإلكتروني</label><input id="em" type="email" required autocomplete="username" dir="ltr">
-    <label for="pw">كلمة المرور</label><input id="pw" type="password" required autocomplete="current-password" dir="ltr">
-    <p class="small" style="color:var(--bad)">${esc(msg)}</p><button class="btn primary">دخول</button></form>`;
+    <label for="em">اسم المستخدم أو البريد الإلكتروني</label><input id="em" type="text" required autocomplete="username" dir="ltr" placeholder="اسم المستخدم (مثال: ahmed)">
+    <label for="pw">كلمة المرور</label><input id="pw" type="password" required autocomplete="current-password" dir="ltr" placeholder="••••••••">
+    <p class="small" style="color:var(--bad)">${esc(msg)}</p><button class="btn primary" id="subBtn">دخول</button></form>`;
+
   document.getElementById('lf').onsubmit = async e => {
     e.preventDefault();
-    const { error } = await sb.auth.signInWithPassword({ email: document.getElementById('em').value.trim(), password: document.getElementById('pw').value });
-    if (error) return showLogin('البريد أو كلمة المرور غير صحيحة');
+    const btn = document.getElementById('subBtn');
+    btn.disabled = true;
+    btn.textContent = 'جارٍ التحقق...';
+
+    const rawInput = document.getElementById('em').value.trim();
+    const pw = document.getElementById('pw').value;
+    let targetEmail = rawInput;
+
+    if (!rawInput.includes('@')) {
+      // إذا كان اسم مستخدم بدون @، نسترجع بريده المسجل من Supabase
+      try {
+        const { data: mappedEmail } = await sb.rpc('get_email_for_username', { p_username: rawInput });
+        targetEmail = mappedEmail || (rawInput.toLowerCase() + '@clinic.local');
+      } catch {
+        targetEmail = rawInput.toLowerCase() + '@clinic.local';
+      }
+    }
+
+    const { error } = await sb.auth.signInWithPassword({ email: targetEmail, password: pw });
+    if (error) return showLogin('اسم المستخدم أو كلمة المرور غير صحيحة');
     boot();
   };
 }

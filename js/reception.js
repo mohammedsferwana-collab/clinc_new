@@ -50,17 +50,30 @@ export function renderReception(root, ctx) {
       Object.entries(counts).map(([c, n]) => `<button class="chip ${filter === c ? 'on' : ''}" data-c="${esc(c)}">${esc(c)} ${n}</button>`).join('');
     const rows = data.filter(v => !filter || (v.clinic || 'بدون عيادة') === filter);
     root.querySelector('#today').innerHTML = rows.length
-      ? `<div class="tablewrap"><table><thead><tr><th>#</th><th>المراجع</th><th>الهوية</th><th>العيادة</th><th>الطبيب</th><th>العمر</th><th>الحالة</th><th>الوقت</th></tr></thead><tbody>${rows.map((v, i) =>
-          `<tr><td>${i + 1}</td><td>${esc(v.patients?.full_name)}</td><td>${esc(v.patients?.national_id || '—')}</td><td>${esc(v.clinic \vert{}\vert{} '—')}</td><td>${esc(v.doctor_name || '—')}</td>
+      ? `<div class="tablewrap"><table><thead><tr><th>#</th><th>المراجع</th><th>الهوية</th><th>العيادة</th><th>الطبيب</th><th>العمر</th><th>الحالة</th><th>الوقت</th><th>إجراءات</th></tr></thead><tbody>${rows.map((v, i) =>
+          `<tr data-id="${v.id}"><td>${i + 1}</td><td>${esc(v.patients?.full_name)}</td><td>${esc(v.patients?.national_id || '—')}</td><td>${esc(v.clinic || '—')}</td><td>${esc(v.doctor_name || '—')}</td>
            <td>${esc(v.age_at_visit || '—')}</td>
            <td><span class="badge ${STATUS[v.status][1]}">${STATUS[v.status][0]}</span></td>
-           <td>${new Date(v.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</td></tr>`).join('')}</tbody></table></div>`
+           <td>${new Date(v.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</td>
+           <td class="row" style="gap:.25rem; flex-wrap:nowrap">
+             <button class="btn sm" data-act="edit" title="تعديل بيانات الزيارة">تعديل</button>
+             <button class="btn sm danger" data-act="del" title="حذف الزيارة">حذف</button>
+           </td></tr>`).join('')}</tbody></table></div>`
       : '<div class="panel empty">لا توجد زيارات مسجلة اليوم.</div>';
   }
 
   root.querySelector('#chips').onclick = e => {
     const b = e.target.closest('.chip');
     if (b) { filter = b.dataset.c; loadToday(); }
+  };
+  root.querySelector('#today').onclick = e => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const tr = btn.closest('tr');
+    const v = todayRows.find(x => x.id === tr?.dataset.id);
+    if (!v) return;
+    if (btn.dataset.act === 'edit') openEditVisit(ctx, v, loadToday);
+    else if (btn.dataset.act === 'del') deleteVisit(ctx, v, loadToday);
   };
 
   // البحث المخصص (R2) مع فصل حالات الفشل عن عدم الوجود
@@ -104,7 +117,7 @@ export function renderReception(root, ctx) {
               <th>رقم الهوية</th>
               <th>رقم الجوال</th>
               <th>آخر زيارة مسجلة</th>
-              <th>إجراء</th>
+              <th>إجراءات</th>
             </tr>
           </thead>
           <tbody>
@@ -375,7 +388,7 @@ export function renderVisits(root, ctx) {
   let rows = [], shown = [], clinic = localStorage.getItem('visits_clinic') || '';
 
   root.innerHTML = `<header class="pagehead">
-      <h1>قائمة الزيارات والتشخيص</h1>
+      <h1>سجل الزيارات والتشخيص</h1>
       <span id="bar"></span>
     </header>
     <div class="panel noprint">
@@ -408,7 +421,7 @@ export function renderVisits(root, ctx) {
   const $ = id => root.querySelector('#' + id);
 
   async function load() {
-    let a = $('d1').value \vert{}\vert{} today, b =$('d2').value || a;
+    let a = $('d1').value || today, b =$('d2').value || a;
     if (a > b) [a, b] = [b, a];
     const st = $('st').value;
 
@@ -444,7 +457,7 @@ export function renderVisits(root, ctx) {
               <th>الطبيب</th>
               <th>التشخيص</th>
               <th>الحالة</th>
-              <th>إجراء</th>
+              <th>إجراءات</th>
             </tr>
           </thead>
           <tbody>
@@ -457,7 +470,11 @@ export function renderVisits(root, ctx) {
                 <td>${esc(v.doctor_name || '—')}</td>
                 <td>${esc(v.diagnosis || '—')}</td>
                 <td><span class="badge ${STATUS[v.status][1]}">${STATUS[v.status][0]}</span></td>
-                <td><button class="btn sm primary" data-act="open">فتح الملف والتشخيص</button></td>
+                <td class="row" style="gap:.25rem; flex-wrap:nowrap">
+                  <button class="btn sm primary" data-act="open" title="فتح الملف والتشخيص">الملف والتشخيص</button>
+                  <button class="btn sm" data-act="edit" title="تعديل بيانات الزيارة">تعديل</button>
+                  <button class="btn sm danger" data-act="del" title="حذف الزيارة نهائياً">حذف</button>
+                </td>
               </tr>
             `).join('')}
           </tbody>
@@ -467,10 +484,20 @@ export function renderVisits(root, ctx) {
   }
 
   $('list').onclick = e => {
+    const btn = e.target.closest('button[data-act]');
     const tr = e.target.closest('tr');
     if (!tr) return;
     const v = shown.find(x => x.id === tr.dataset.id);
-    if (v) openDoctorConsultation(ctx, v, load);
+    if (!v) return;
+
+    const act = btn?.dataset.act;
+    if (act === 'edit') {
+      openEditVisit(ctx, v, load);
+    } else if (act === 'del') {
+      deleteVisit(ctx, v, load);
+    } else {
+      openDoctorConsultation(ctx, v, load);
+    }
   };
 
   $('q').oninput = debounce(draw, 200);$('d1').onchange = $('d2').onchange =$('st').onchange = load;
@@ -505,7 +532,7 @@ async function openDoctorConsultation(ctx, v, onDone) {
     <div style="max-height:160px; overflow-y:auto; margin-bottom:1rem">
       ${(history && history.length) ? history.map(h => `
         <div class="hist">
-          <b>${fmtDate(h.visit_date)}</b> — العيادة: ${esc(h.clinic \vert{}\vert{} '—')} (الطبيب: ${esc(h.doctor_name || '—')})<br>
+          <b>${fmtDate(h.visit_date)}</b> — العيادة: ${esc(h.clinic || '—')} (الطبيب: ${esc(h.doctor_name || '—')})<br>
           <span class="muted">التشخيص:</span> ${esc(h.diagnosis || '—')}<br>
           <span class="muted">العلاج:</span> ${esc(treatmentText(h))}
         </div>
@@ -614,4 +641,119 @@ async function openDoctorConsultation(ctx, v, onDone) {
       saveBtn.disabled = false;
     }
   };
+}
+// دالة تعديل بيانات الزيارة (تاريخ، عيادة، طبيب، حالة، تشخيص، ملاحظات)
+export function openEditVisit(ctx, v, onDone) {
+  const { sb, clinics = [], doctors = [] } = ctx;
+  const pName = v.patients?.full_name || 'المراجع';
+  const pId = v.patients?.national_id || '—';
+
+  const body = openModal(`<h2>تعديل بيانات الزيارة: ${esc(pName)}</h2>
+    <p class="muted small" style="margin-top:-.4rem; margin-bottom:.8rem">رقم الهوية: ${esc(pId)}</p>
+    <form id="editVisitForm" class="grid">
+      <div>
+        <label>تاريخ الزيارة *</label>
+        <input name="visit_date" type="date" value="${v.visit_date || N.todayISO()}" required>
+      </div>
+      <div>
+        <label>العيادة *</label>
+        <input name="clinic" list="clinicsList" value="${esc(v.clinic || '')}" required placeholder="اختر أو اكتب العيادة">
+        <datalist id="clinicsList">
+          ${clinics.map(c => `<option value="${esc(c.name)}"></option>`).join('')}
+        </datalist>
+      </div>
+      <div>
+        <label>الطبيب المعالج</label>
+        <input name="doctor_name" list="doctorsList" value="${esc(v.doctor_name || '')}" placeholder="اختر أو اكتب اسم الطبيب">
+        <datalist id="doctorsList">
+          ${doctors.map(d => `<option value="${esc(d.name)}"></option>`).join('')}
+        </datalist>
+      </div>
+      <div>
+        <label>نوع الحالة</label>
+        <select name="case_type">
+          ${['جديد', 'مراجع', 'استشارة', 'طوارئ', 'أخرى'].map(t => `<option value="${t}" ${v.case_type === t ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label>حالة الزيارة *</label>
+        <select name="status" required>
+          <option value="waiting" ${v.status === 'waiting' ? 'selected' : ''}>بانتظار الطبيب</option>
+          <option value="seen" ${v.status === 'seen' ? 'selected' : ''}>تمت المعاينة</option>
+        </select>
+      </div>
+      <div>
+        <label>العمر عند الزيارة (اختياري)</label>
+        <input name="age_at_visit" value="${esc(v.age_at_visit || '')}" placeholder="مثال: 25 سنة">
+      </div>
+      <div style="grid-column:1/-1">
+        <label>التشخيص الطبي</label>
+        <textarea name="diagnosis" placeholder="التشخيص الطبي للزيارة...">${esc(v.diagnosis || '')}</textarea>
+      </div>
+      <div style="grid-column:1/-1">
+        <label>ملاحظات إضافية</label>
+        <input name="notes" value="${esc(v.notes || '')}" placeholder="أي ملاحظات حول الزيارة...">
+      </div>
+      <div style="grid-column:1/-1" class="row">
+        <button class="btn primary" id="saveVisitBtn" style="flex:1">حفظ تعديلات الزيارة</button>
+        <button type="button" class="btn danger" id="delVisitFromEdit">حذف الزيارة</button>
+      </div>
+    </form>`);
+
+  body.querySelector('#delVisitFromEdit').onclick = () => {
+    closeModal();
+    deleteVisit(ctx, v, onDone);
+  };
+
+  body.querySelector('#editVisitForm').onsubmit = async e => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    const btn = body.querySelector('#saveVisitBtn');
+    btn.disabled = true;
+
+    const rec = {
+      visit_date: f.visit_date,
+      clinic: N.cleanText(f.clinic) || null,
+      doctor_name: N.cleanText(f.doctor_name) || null,
+      case_type: f.case_type || null,
+      status: f.status,
+      age_at_visit: N.cleanText(f.age_at_visit) || null,
+      diagnosis: N.cleanText(f.diagnosis) || null,
+      notes: N.cleanText(f.notes) || null
+    };
+
+    const { error } = await sb.from('visits').update(rec).eq('id', v.id);
+    if (error) {
+      btn.disabled = false;
+      return toast(errMsg(error), 'bad');
+    }
+
+    toast('تم تحديث بيانات الزيارة بنجاح');
+    closeModal();
+    if (onDone) onDone();
+  };
+}
+
+// دالة حذف الزيارة مع فك الارتباط الآمن بحركات المخزون والوصفات
+export async function deleteVisit(ctx, v, onDone) {
+  const { sb } = ctx;
+  const pName = v.patients?.full_name || 'المراجع';
+  const dateStr = fmtDate(v.visit_date);
+  if (!confirm(`هل أنت متأكد من حذف زيارة «${pName}» بتاريخ ${dateStr} نهائياً؟\nسيتم حذف تفاصيل الزيارة والوصفة الطبية التابعة لها ولا يمكن التراجع.`)) return;
+
+  try {
+    // فك ارتباط حركات المخزون بوصفات هذه الزيارة لتجنب مشاكل القيود
+    const { data: items } = await sb.from('visit_items').select('id').eq('visit_id', v.id);
+    if (items?.length) {
+      await sb.from('stock_movements').update({ item_id: null }).in('item_id', items.map(x => x.id));
+    }
+
+    const { error } = await sb.from('visits').delete().eq('id', v.id);
+    if (error) return toast(errMsg(error), 'bad');
+
+    toast('تم حذف الزيارة بنجاح');
+    if (onDone) onDone();
+  } catch (err) {
+    toast(errMsg(err), 'bad');
+  }
 }

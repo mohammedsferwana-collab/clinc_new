@@ -7,6 +7,7 @@ create extension if not exists pgcrypto;
 create table if not exists profiles (
   id uuid primary key references auth.users on delete cascade,
   full_name text not null default '',
+  username text unique,
   role text not null default 'reception' check (role in ('admin','reception','doctor','pharmacy')),
   active boolean not null default true,
   created_at timestamptz not null default now()
@@ -15,11 +16,23 @@ create table if not exists profiles (
 -- أول مستخدم يُنشأ يصبح مديراً تلقائياً، والبقية «استقبال» حتى يغيّر المدير دورهم
 create or replace function handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$
+declare
+  u_name text;
 begin
-  insert into profiles(id, full_name, role)
-  values (new.id,
-          coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email,'@',1)),
-          case when (select count(*) from profiles) = 0 then 'admin' else 'reception' end);
+  u_name := coalesce(
+    new.raw_user_meta_data->>'username',
+    split_part(new.email, '@', 1)
+  );
+  insert into profiles(id, full_name, role, username)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email,'@',1)),
+    case when (select count(*) from profiles) = 0 then 'admin' else coalesce(new.raw_user_meta_data->>'role', 'reception') end,
+    u_name
+  )
+  on conflict (id) do update set
+    full_name = coalesce(excluded.full_name, profiles.full_name),
+    username = coalesce(excluded.username, profiles.username);
   return new;
 end $$;
 drop trigger if exists on_auth_user_created on auth.users;
@@ -166,7 +179,7 @@ drop policy if exists u_visits on visits;
 drop policy if exists d_visits on visits;
 create policy i_visits on visits for insert to authenticated with check (my_role() in ('admin','reception','doctor'));
 create policy u_visits on visits for update to authenticated using (my_role() in ('admin','reception','doctor')) with check (my_role() in ('admin','reception','doctor'));
-create policy d_visits on visits for delete to authenticated using (my_role() = 'admin');
+create policy d_visits on visits for delete to authenticated using (my_role() in ('admin','reception'));
 
 drop policy if exists w_items on visit_items;
 create policy w_items on visit_items for all to authenticated
@@ -179,4 +192,116 @@ create policy w_drugs on drugs for all to authenticated
 drop policy if exists i_moves on stock_movements;
 drop policy if exists d_moves on stock_movements;
 create policy i_moves on stock_movements for insert to authenticated with check (my_role() in ('admin','pharmacy'));
-create policy d_moves on stock_movements for delete to authenticated using (my_role() = 'admin');
+create policy d_moves on stock_movements for delete to authenticated using (my_role() in ('admin','pharmacy'));
+drop policy if exists u_moves on stock_movements;
+create policy u_moves on stock_movements for update to authenticated using (my_role() in ('admin','pharmacy')) with check (my_role() in ('admin','pharmacy'));
+
+
+-- ========== دوال إدارة المستخدمين والدخول بدون بريد ==========
+create or replace function get_email_for_username(p_username text) returns text
+language plpgsql security definer set search_path = public, auth as $$
+declare
+  found_email text;
+  clean_u text := lower(trim(p_username));
+begin
+  if clean_u = '' then return null; end if;
+  select u.email into found_email
+  from auth.users u
+  join profiles p on p.id = u.id
+  where lower(p.username) = clean_u and p.active = true
+  limit 1;
+
+  if found_email is null then
+    select u.email into found_email
+    from auth.users u
+    join profiles p on p.id = u.id
+    where (lower(split_part(u.email, '@', 1)) = clean_u or lower(u.email) = clean_u)
+      and p.active = true
+    limit 1;
+  end if;
+
+  return found_email;
+end $$;
+grant execute on function get_email_for_username(text) to anon, authenticated;
+
+create or replace function admin_create_user(
+  p_username text,
+  p_password text,
+  p_full_name text,
+  p_role text default 'reception'
+) returns json
+language plpgsql security definer set search_path = auth, public, extensions as $$
+declare
+  new_id uuid := gen_random_uuid();
+  clean_user text := lower(trim(p_username));
+  user_email text;
+  encrypted_pw text;
+begin
+  if (select role from public.profiles where id = auth.uid() and active) <> 'admin' then
+    raise exception 'غير مصرح: صلاحية مدير مطلوبة لإنشاء المستخدمين';
+  end if;
+
+  if clean_user = '' or p_password = '' then
+    raise exception 'اسم المستخدم وكلمة المرور مطلوبان';
+  end if;
+
+  if length(p_password) < 6 then
+    raise exception 'كلمة المرور يجب أن لا تقل عن 6 خانات';
+  end if;
+
+  if p_role not in ('admin', 'reception', 'doctor', 'pharmacy') then
+    p_role := 'reception';
+  end if;
+
+  user_email := clean_user || '@clinic.local';
+
+  if exists (select 1 from auth.users where lower(email) = user_email) or
+     exists (select 1 from public.profiles where lower(username) = clean_user) then
+    raise exception 'اسم المستخدم «%» مسجل مسبقاً', clean_user;
+  end if;
+
+  encrypted_pw := crypt(p_password, gen_salt('bf'));
+
+  insert into auth.users (
+    id, instance_id, email, encrypted_password, email_confirmed_at,
+    raw_app_meta_data, raw_user_meta_data, created_at, updated_at, role, aud
+  ) values (
+    new_id, '00000000-0000-0000-0000-000000000000', user_email, encrypted_pw, now(),
+    '{"provider":"email","providers":["email"]}'::jsonb,
+    jsonb_build_object('full_name', p_full_name, 'username', clean_user, 'role', p_role),
+    now(), now(), 'authenticated', 'authenticated'
+  );
+
+  insert into public.profiles (id, full_name, role, username, active)
+  values (new_id, p_full_name, p_role, clean_user, true)
+  on conflict (id) do update set
+    full_name = excluded.full_name,
+    role = excluded.role,
+    username = excluded.username,
+    active = true;
+
+  return json_build_object('id', new_id, 'username', clean_user, 'email', user_email, 'full_name', p_full_name, 'role', p_role);
+end $$;
+grant execute on function admin_create_user(text, text, text, text) to authenticated;
+
+create or replace function admin_set_user_password(
+  p_user_id uuid,
+  p_new_password text
+) returns void
+language plpgsql security definer set search_path = auth, public, extensions as $$
+begin
+  if (select role from public.profiles where id = auth.uid() and active) <> 'admin' then
+    raise exception 'غير مصرح: صلاحية مدير مطلوبة';
+  end if;
+  if length(trim(p_new_password)) < 6 then
+    raise exception 'كلمة المرور يجب أن لا تقل عن 6 خانات';
+  end if;
+  update auth.users
+  set encrypted_password = crypt(p_new_password, gen_salt('bf')),
+      updated_at = now()
+  where id = p_user_id;
+  if not found then
+    raise exception 'المستخدم غير موجود';
+  end if;
+end $$;
+grant execute on function admin_set_user_password(uuid, text) to authenticated;

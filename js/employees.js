@@ -10,7 +10,7 @@ export function renderEmployees(root, ctx) {
   const { sb } = ctx;
   let list = [];
   root.innerHTML = `<header class="pagehead"><h1>الموظفون</h1><div class="row" id="tools">
-    <input id="f" placeholder="بحث بالاسم أو الهوية أو التخصص" style="width:260px"><button class="btn primary" id="new">موظف جديد</button></div></header><div id="list"></div>`;
+    <input id="f" placeholder="بحث بالاسم أو الهوية أو التخصص" style="width:260px"><button class="btn" id="importEmpBtn" title="استيراد موظفين من ملف إكسل">+ إضافة بإكسل</button><button class="btn primary" id="new">موظف جديد</button></div></header><div id="list"></div>`;
   const tools = root.querySelector('#tools');
   tools.append(exportBar(() => ({
     title: 'قائمة الموظفين', subtitle: 'تاريخ التصدير: ' + N.todayISO(), filename: 'الموظفون-' + N.todayISO(),
@@ -35,6 +35,7 @@ export function renderEmployees(root, ctx) {
   root.querySelector('#f').oninput = draw;
   root.querySelector('#list').onclick = e => { const tr = e.target.closest('tr[data-id]'); if (tr) openEmployee(ctx, list.find(x => x.id === tr.dataset.id), load); };
   root.querySelector('#new').onclick = () => openEmployee(ctx, null, load);
+  root.querySelector('#importEmpBtn').onclick = () => openEmployeesExcelImport(ctx, list, load);
   load();
 }
 
@@ -128,4 +129,241 @@ async function filesSection(ctx, emp, box) {
     };
   }
   draw();
+}
+
+
+// استيراد الموظفين من ملف إكسل
+function openEmployeesExcelImport(ctx, existingList, onDone) {
+  const { sb } = ctx;
+
+  const body = openModal(`<h2>استيراد موظفين من ملف إكسل</h2>
+    <div class="panel" style="margin-bottom:1rem">
+      <p>يمكنك إضافة مجموعة من الموظفين دفعة واحدة من ملف إكسل (.xlsx أو .xls أو .csv).</p>
+      <div class="row" style="gap:.6rem; margin-top:.5rem">
+        <button class="btn sm" id="dlEmpTemplateBtn">⬇ تحميل نموذج إكسل للموظفين</button>
+        <span class="muted small">يحتوي النموذج على الأعمدة: الاسم الرباعي، رقم الهوية، رقم التواصل، الجنس، التخصص، بداية الدوام، نهاية الدوام، مهلة التأخير، ملاحظات.</span>
+      </div>
+    </div>
+
+    <div style="margin-bottom:1rem">
+      <label>اختر ملف الإكسل</label>
+      <input type="file" id="empExcelFile" accept=".xlsx,.xls,.csv">
+    </div>
+
+    <div id="empImportPreview" style="max-height:280px; overflow-y:auto; margin-bottom:1rem"></div>
+
+    <div class="row between" id="empImportActions" hidden>
+      <span id="empImportSummary" class="muted"></span>
+      <button class="btn primary" id="confirmEmpImportBtn">تأكيد واستيراد الموظفين</button>
+    </div>`, { wide: true });
+
+  // تحميل نموذج إكسل
+  body.querySelector('#dlEmpTemplateBtn').onclick = () => {
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL: true }] };
+    const headers = ['الاسم الرباعي', 'رقم الهوية', 'رقم التواصل', 'الجنس', 'التخصص / الوظيفة', 'بداية الدوام', 'نهاية الدوام', 'مهلة التأخير (دقائق)', 'ملاحظات'];
+    const sampleData = [
+      headers,
+      ['د. محمد أحمد سعيد', '900123456', '0599123456', 'ذكر', 'طبيب عام', '08:00', '15:00', 15, 'دوام صباحي'],
+      ['سارة محمود خالد', '900654321', '0599654321', 'أنثى', 'صيدلانية', '08:00', '15:00', 10, 'مسؤولة الصيدلية'],
+      ['إياد كمال ناصر', '900789123', '0599789123', 'ذكر', 'تمريض', '08:00', '15:00', 0, 'قسم التمريض']
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(sampleData);
+    ws['!cols'] = [{ wch: 26 }, { wch: 15 }, { wch: 15 }, { wch: 10 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 20 }, { wch: 22 }];
+    XLSX.utils.book_append_sheet(wb, ws, 'الموظفون');
+    XLSX.writeFile(wb, 'نموذج_الموظفون.xlsx');
+  };
+
+  const parseTimeVal = (v, defaultVal) => {
+    if (v == null || v === '') return defaultVal;
+    if (typeof v === 'number' && v >= 0 && v < 1) {
+      const totalSecs = Math.round(v * 86400);
+      const h = Math.floor(totalSecs / 3600);
+      const m = Math.floor((totalSecs % 3600) / 60);
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+    const s = String(v).trim();
+    const match = s.match(/(\d{1,2}):(\d{2})/);
+    if (match) return `${String(match[1]).padStart(2, '0')}:${match[2]}`;
+    return defaultVal;
+  };
+
+  let parsedEmployees = [];
+  const fileInput = body.querySelector('#empExcelFile');
+  const previewDiv = body.querySelector('#empImportPreview');
+  const actionsDiv = body.querySelector('#empImportActions');
+  const summarySpan = body.querySelector('#empImportSummary');
+  const confirmBtn = body.querySelector('#confirmEmpImportBtn');
+
+  fileInput.onchange = async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const firstSheet = wb.SheetNames[0];
+      const rawRows = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet], { header: 1, raw: true, defval: '' });
+
+      if (!rawRows || rawRows.length < 2) {
+        previewDiv.innerHTML = '<p class="muted bad">الملف فارغ أو لا يحتوي على صفوف بيانات.</p>';
+        actionsDiv.hidden = true;
+        return;
+      }
+
+      // البحث عن صف العناوين
+      let headerIdx = -1;
+      for (let i = 0; i < Math.min(rawRows.length, 10); i++) {
+        const rowStr = rawRows[i].map(c => String(c).trim()).join(' ');
+        if (/اسم|موظف|هوية|وظيفة/i.test(rowStr)) {
+          headerIdx = i;
+          break;
+        }
+      }
+      if (headerIdx === -1) headerIdx = 0;
+
+      const headers = rawRows[headerIdx].map(c => String(c).trim());
+      const nameCol = headers.findIndex(h => /اسم.*رباعي|^الاسم$|name|employee/i.test(h));
+      const idCol = headers.findIndex(h => /هوي|national|id/i.test(h));
+      const phoneCol = headers.findIndex(h => /هاتف|جوال|موبايل|تواصل|phone|mobile/i.test(h));
+      const genderCol = headers.findIndex(h => /جنس|gender/i.test(h));
+      const specCol = headers.findIndex(h => /تخصص|وظيفة|مهنة|specialty|job/i.test(h));
+      const startCol = headers.findIndex(h => /بداية.*دوام|حضور|start/i.test(h));
+      const endCol = headers.findIndex(h => /نهاية.*دوام|انصراف|end/i.test(h));
+      const graceCol = headers.findIndex(h => /مهلة|تأخير|grace/i.test(h));
+      const notesCol = headers.findIndex(h => /ملاحظ|note/i.test(h));
+
+      if (nameCol === -1) {
+        previewDiv.innerHTML = '<p class="muted bad">تعذر العثور على عمود «الاسم» في ملف الإكسل.</p>';
+        actionsDiv.hidden = true;
+        return;
+      }
+
+      parsedEmployees = [];
+      const existingIds = new Set(existingList.map(emp => emp.national_id).filter(Boolean));
+      const existingNames = new Set(existingList.map(emp => N.arNorm(emp.full_name)));
+
+      for (let i = headerIdx + 1; i < rawRows.length; i++) {
+        const r = rawRows[i];
+        const fullName = N.cleanText(r[nameCol]);
+        if (!fullName) continue;
+
+        const natId = idCol >= 0 ? N.cleanId(r[idCol]) : null;
+        const phone = phoneCol >= 0 ? N.cleanPhone(r[phoneCol]) : null;
+        const gender = genderCol >= 0 ? N.normGender(r[genderCol]) : null;
+        const specialty = specCol >= 0 ? N.cleanText(r[specCol]) : null;
+        const workStart = startCol >= 0 ? parseTimeVal(r[startCol], '08:00') : '08:00';
+        const workEnd = endCol >= 0 ? parseTimeVal(r[endCol], '15:00') : '15:00';
+        const graceMinutes = graceCol >= 0 ? Math.max(0, parseInt(r[graceCol]) || 0) : 0;
+        const notes = notesCol >= 0 ? N.cleanText(r[notesCol]) : null;
+
+        const isDupId = natId && existingIds.has(natId);
+        const isDupName = existingNames.has(N.arNorm(fullName));
+
+        parsedEmployees.push({
+          full_name: fullName,
+          national_id: natId,
+          phone,
+          gender,
+          specialty,
+          work_start: workStart,
+          work_end: workEnd,
+          grace_minutes: graceMinutes,
+          notes,
+          isDupId,
+          isDupName
+        });
+      }
+
+      if (!parsedEmployees.length) {
+        previewDiv.innerHTML = '<p class="muted">لم يتم العثور على موظفين صالحين للاستيراد في الملف.</p>';
+        actionsDiv.hidden = true;
+        return;
+      }
+
+      previewDiv.innerHTML = `
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr>
+                <th>الاسم الرباعي</th>
+                <th>رقم الهوية</th>
+                <th>رقم التواصل</th>
+                <th>الجنس</th>
+                <th>التخصص</th>
+                <th>الدوام</th>
+                <th>الحالة</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${parsedEmployees.map(e => `
+                <tr>
+                  <td><b>${esc(e.full_name)}</b></td>
+                  <td>${esc(e.national_id || '—')}</td>
+                  <td>${esc(e.phone || '—')}</td>
+                  <td>${esc(e.gender || '—')}</td>
+                  <td>${esc(e.specialty || '—')}</td>
+                  <td>${esc(e.work_start)} – ${esc(e.work_end)}</td>
+                  <td>
+                    ${e.isDupId
+                      ? '<span class="badge bad" title="رقم الهوية مسجل لموظف آخر">تكرار هوية</span>'
+                      : e.isDupName
+                      ? '<span class="badge wait" title="الاسم مسجل مسبقاً">تكرار اسم</span>'
+                      : '<span class="badge ok">جديد</span>'}
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>`;
+
+      const validCount = parsedEmployees.filter(e => !e.isDupId).length;
+      summarySpan.textContent = `الإجمالي: ${parsedEmployees.length} موظف (${validCount} مؤهل للإضافة).`;
+      actionsDiv.hidden = false;
+
+    } catch (err) {
+      previewDiv.innerHTML = `<p class="bad">خطأ أثناء قراءة الملف: ${esc(err.message)}</p>`;
+      actionsDiv.hidden = true;
+    }
+  };
+
+  confirmBtn.onclick = async () => {
+    if (!parsedEmployees.length) return;
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'جارٍ استيراد الموظفين...';
+
+    let added = 0;
+    let skipped = 0;
+
+    for (const emp of parsedEmployees) {
+      if (emp.isDupId) {
+        skipped++;
+        continue;
+      }
+
+      const rec = {
+        full_name: emp.full_name,
+        national_id: emp.national_id,
+        phone: emp.phone,
+        gender: emp.gender,
+        specialty: emp.specialty,
+        work_start: emp.work_start,
+        work_end: emp.work_end,
+        grace_minutes: emp.grace_minutes,
+        notes: emp.notes,
+        active: true
+      };
+
+      const { error } = await sb.from('employees').insert(rec);
+      if (error) {
+        skipped++;
+      } else {
+        added++;
+      }
+    }
+
+    toast(`تم استيراد ${added} موظف بنجاح${skipped ? ` (تم تخطي ${skipped} موظف)` : ''}`);
+    closeModal();
+    onDone();
+  };
 }
