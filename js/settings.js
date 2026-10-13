@@ -85,10 +85,45 @@ export async function renderSettings(root, ctx) {
       </div>
     </div>
 
-    <div class="cols2"><div class="panel"><h2>العيادات</h2><div class="chips">${ctx.clinics.map(c => `<span class="chip">${esc(c.name)}</span>`).join('')}</div>
-      <form class="row" data-t="clinics" style="margin-top:.8rem"><input name="name" placeholder="عيادة جديدة" required><button class="btn">إضافة</button></form></div>
-    <div class="panel"><h2>الأطباء</h2><div class="chips">${ctx.doctors.map(c => `<span class="chip">${esc(c.name)}</span>`).join('') || '<span class="muted">لا يوجد أطباء مسجلون</span>'}</div>
-      <form class="row" data-t="doctors" style="margin-top:.8rem"><input name="name" placeholder="طبيب جديد" required><button class="btn">إضافة</button></form></div></div>`;
+    <div class="cols2">
+      <!-- إدارة العيادات -->
+      <div class="panel">
+        <h2>العيادات</h2>
+        <div class="chips" id="clinicChips">
+          ${ctx.clinics.map(c => `
+            <span class="chip" style="display:inline-flex; align-items:center; gap:.4rem">
+              <span>${esc(c.name)}</span>
+              <button type="button" class="del-clinic" data-id="${c.id}" data-name="${esc(c.name)}" style="background:none; border:none; color:var(--bad); font-weight:bold; cursor:pointer; font-size:1.1rem; line-height:1; padding:0 3px" title="حذف العيادة">×</button>
+            </span>
+          `).join('') || '<span class="muted">لا توجد عيادات</span>'}
+        </div>
+        <form class="row" data-t="clinics" style="margin-top:.8rem">
+          <input name="name" placeholder="عيادة جديدة" required>
+          <button class="btn">إضافة</button>
+        </form>
+      </div>
+
+      <!-- إدارة الأطباء وحذف الأطباء الزائدين (مثل علي) -->
+      <div class="panel">
+        <div class="row between" style="margin-bottom:.4rem">
+          <h2 style="margin:0">الأطباء</h2>
+          <button type="button" class="btn sm danger" id="cleanAliBtn" title="حذف الطبيب علي والأطباء التجريبيين">حذف الطبيب علي والأطباء الزائدين</button>
+        </div>
+        <p class="muted small" style="margin:0 0 .6rem">انقر على علامة (×) لحذف أي طبيب. كما يُضاف الأطباء تلقائياً عند تسجيلهم في صفحة الموظفون كطبيب معالج.</p>
+        <div class="chips" id="docChips">
+          ${ctx.doctors.map(c => `
+            <span class="chip" style="display:inline-flex; align-items:center; gap:.4rem">
+              <span>${esc(c.name)}</span>
+              <button type="button" class="del-doc" data-id="${c.id}" data-name="${esc(c.name)}" style="background:none; border:none; color:var(--bad); font-weight:bold; cursor:pointer; font-size:1.1rem; line-height:1; padding:0 3px" title="حذف هذا الطبيب">×</button>
+            </span>
+          `).join('') || '<span class="muted">لا يوجد أطباء مسجلون</span>'}
+        </div>
+        <form class="row" data-t="doctors" style="margin-top:.8rem">
+          <input name="name" placeholder="طبيب جديد" required>
+          <button class="btn">إضافة</button>
+        </form>
+      </div>
+    </div>`;
 
     bindGeneral();
 
@@ -96,6 +131,51 @@ export async function renderSettings(root, ctx) {
     const runBackup = () => executeBackup(ctx);
     root.querySelector('#backupFromSettingsTop').onclick = runBackup;
     root.querySelector('#backupFromSettingsBtn').onclick = runBackup;
+
+    // حذف طبيب فردي بالنقر على ×
+    root.querySelector('#docChips').onclick = async e => {
+      const btn = e.target.closest('.del-doc');
+      if (!btn) return;
+      const name = btn.dataset.name;
+      const id = btn.dataset.id;
+      if (!confirm(`هل أنت متأكد من حذف الطبيب «${name}» من النظام؟`)) return;
+      if (String(id).startsWith('emp_')) {
+        toast('هذا الطبيب مضاف كموظف؛ لتعديله أو إيقافه افتح شاشة الموظفون', 'wait');
+        return;
+      }
+      const { error } = await sb.from('doctors').delete().eq('id', id);
+      if (error) return toast(errMsg(error), 'bad');
+      toast(`تم حذف الطبيب «${name}» بنجاح`);
+      await ctx.loadLookups();
+      draw();
+    };
+
+    // زر الحذف السريع للطبيب علي والأطباء التجريبيين
+    const cleanAliBtn = root.querySelector('#cleanAliBtn');
+    if (cleanAliBtn) {
+      cleanAliBtn.onclick = async () => {
+        if (!confirm('تأكيد حذف الطبيب «علي» والأطباء التجريبيين غير المعتمدين (علي، غلي، ابابيل، احمد، ايمن، عبير)؟')) return;
+        const testNames = ['علي', 'غلي', 'ابابيل', 'احمد', 'ايمن', 'عبير'];
+        const { error } = await sb.from('doctors').delete().in('name', testNames);
+        toast(error ? errMsg(error) : 'تم حذف الطبيب علي والأطباء التجريبيين بنجاح', error ? 'bad' : 'ok');
+        await ctx.loadLookups();
+        draw();
+      };
+    }
+
+    // حذف عيادة بالنقر على ×
+    root.querySelector('#clinicChips').onclick = async e => {
+      const btn = e.target.closest('.del-clinic');
+      if (!btn) return;
+      const name = btn.dataset.name;
+      const id = btn.dataset.id;
+      if (!confirm(`هل أنت متأكد من حذف عيادة «${name}»؟`)) return;
+      const { error } = await sb.from('clinics').delete().eq('id', id);
+      if (error) return toast(errMsg(error), 'bad');
+      toast(`تم حذف عيادة «${name}» بنجاح`);
+      await ctx.loadLookups();
+      draw();
+    };
 
     // إضافة مستخدم جديد
     root.querySelector('#addUserBtn').onclick = () => {
@@ -178,7 +258,6 @@ export async function renderSettings(root, ctx) {
       const role = f.role;
       const pwd = f.password;
 
-      // محاولة الإنشاء عبر دالة admin_create_user
       let createdUserId = null;
       const { data: res, error: rpcErr } = await sb.rpc('admin_create_user', {
         p_username: cleanUser,
@@ -190,8 +269,6 @@ export async function renderSettings(root, ctx) {
       if (!rpcErr && res) {
         createdUserId = res.id;
       } else {
-        // بديل في حال لم يتم تشغيل schema_v4.sql في Supabase:
-        // محاولة الإنشاء عبر بريد اصطناعي
         const syntheticEmail = `${cleanUser}@clinic.local`;
         const { data: authData, error: authErr } = await sb.auth.signUp({
           email: syntheticEmail,
@@ -209,7 +286,6 @@ export async function renderSettings(root, ctx) {
         }
 
         createdUserId = authData.user?.id;
-        // تحديث الملف الشخصي
         if (createdUserId) {
           await sb.from('profiles').upsert({
             id: createdUserId,
@@ -221,7 +297,6 @@ export async function renderSettings(root, ctx) {
         }
       }
 
-      // إذا تم اختيار موظف للربط
       if (f.employee_id && createdUserId) {
         await sb.from('employees').update({ user_id: createdUserId }).eq('id', f.employee_id);
       }

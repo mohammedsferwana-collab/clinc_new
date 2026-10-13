@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { esc, toast, ROLES } from './ui.js';
-import { renderReception, renderVisits } from './reception.js';
+import { renderEstmara, renderSearch, renderVisits } from './reception.js';
 import { renderPharmacy } from './pharmacy.js';
 import { renderSettings } from './settings.js';
 import { renderReports } from './reports.js';
@@ -18,11 +18,11 @@ if (!cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) {
   throw new Error('missing config');
 }
 const sb = createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
-const ctx = { sb, profile: null, clinics: [], doctors: [], drugs: [], cleanup: null, settings: null };
+const ctx = { sb, profile: null, clinics: [], doctors: [], drugs: [], cleanup: null, settings: null, estmaraPrefill: null };
 ctx.settings = await loadSettings(sb);
 applyTheme(ctx.settings);
 
-// رسم الاسم والشعار في الواجهة (يُستدعى عند تغيير الإعدادات أو معاينتها)
+// رسم الاسم والشعار في الواجهة
 const brandHTML = s => `${s.logo_url ? `<img src="${esc(s.logo_url)}" alt="">` : ''}<span>${esc(s.site_name)}</span>`;
 const printHead = s => `<b>${esc(s.site_name)}</b>${s.tagline ? ' — ' + esc(s.tagline) : ''}<br>${[s.address, s.phone].filter(Boolean).map(esc).join(' • ')}`;
 ctx.paint = s => {
@@ -33,8 +33,12 @@ ctx.paint = s => {
 };
 ctx.setSettings = s => { ctx.settings = s; ctx.paint(s); };
 
+// شريط التنقل الرئيسي:
+// 1. أول صفحة: صفحة الاستمارة بدل الاستقبال
+// 2. ثانياً: صفحة البحث
 const NAV = [
-  ['reception', 'الاستقبال', renderReception, ['admin', 'reception']],
+  ['estmara', 'صفحة الاستمارة', renderEstmara, ['admin', 'reception']],
+  ['search', 'صفحة البحث', renderSearch, ['admin', 'reception']],
   ['visits', 'الزيارات', renderVisits, ['admin', 'doctor', 'reception']],
   ['pharmacy', 'الصيدلية', renderPharmacy, ['admin', 'pharmacy']],
   ['attendance', 'الحضور والانصراف', renderAttendance, ['admin', 'reception', 'doctor', 'pharmacy']],
@@ -47,12 +51,26 @@ const NAV = [
 ];
 
 ctx.loadLookups = async () => {
-  const [c, d, g] = await Promise.all([
+  const [c, d, emps, g] = await Promise.all([
     sb.from('clinics').select('*').order('sort').order('name'),
     sb.from('doctors').select('*').order('name'),
+    sb.from('employees').select('id,full_name,specialty,active').eq('active', true),
     sb.from('drugs').select('id,name,unit,min_stock').eq('active', true).order('name'),
   ]);
-  ctx.clinics = c.data || []; ctx.doctors = d.data || []; ctx.drugs = g.data || [];
+  ctx.clinics = c.data || [];
+
+  // دمج الأطباء من جدول doctors ومن موظفي العيادة المصنفين كأطباء
+  const docMap = new Map();
+  (d.data || []).forEach(doc => docMap.set(doc.name, doc));
+  (emps.data || []).forEach(emp => {
+    if (/طبيب|دكتور/i.test(emp.specialty || '')) {
+      if (!docMap.has(emp.full_name)) {
+        docMap.set(emp.full_name, { id: 'emp_' + emp.id, name: emp.full_name });
+      }
+    }
+  });
+  ctx.doctors = Array.from(docMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+  ctx.drugs = g.data || [];
 };
 
 function showLogin(msg = '') {
@@ -72,7 +90,6 @@ function showLogin(msg = '') {
     let targetEmail = rawInput;
 
     if (!rawInput.includes('@')) {
-      // إذا كان اسم مستخدم بدون @، نسترجع بريده المسجل من Supabase
       try {
         const { data: mappedEmail } = await sb.rpc('get_email_for_username', { p_username: rawInput });
         targetEmail = mappedEmail || (rawInput.toLowerCase() + '@clinic.local');
@@ -111,7 +128,8 @@ async function boot() {
 }
 
 function route(items) {
-  const key = location.hash.slice(2);
+  const hash = location.hash.slice(2);
+  const key = hash.split('?')[0]; // دعم المعلمات مثل #/estmara?id=...
   const page = items.find(n => n[0] === key) || items[0];
   if (ctx.cleanup) { ctx.cleanup(); ctx.cleanup = null; }
   document.querySelectorAll('.side a').forEach(a => a.classList.toggle('on', a.dataset.k === page[0]));

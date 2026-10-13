@@ -49,6 +49,12 @@ async function openEmployee(ctx, emp, done) {
     <div><label>رقم التواصل</label><input name="phone" inputmode="tel" value="${esc(v.phone)}"></div>
     <div><label>الجنس</label><select name="gender"><option value="">—</option>${['ذكر', 'أنثى'].map(g => `<option ${v.gender === g ? 'selected' : ''}>${g}</option>`).join('')}</select></div>
     <div><label>التخصص / الوظيفة</label><input name="specialty" value="${esc(v.specialty)}" placeholder="مثال: طبيب عام، صيدلي، تمريض"></div>
+    <div><label>نوع الدور / الوظيفة في العيادة</label><select name="clinic_role"><option value="">اختر الدور</option>
+      <option value="doctor" ${/طبيب|دكتور/i.test(v.specialty || '') ? 'selected' : ''}>طبيب معالج (يُضاف للأطباء تلقائياً)</option>
+      <option value="pharmacy" ${/صيدل/i.test(v.specialty || '') ? 'selected' : ''}>صيدلي / صيدلية</option>
+      <option value="nurse" ${/تمريض/i.test(v.specialty || '') ? 'selected' : ''}>تمريض</option>
+      <option value="reception" ${/استقبال|سكرتار/i.test(v.specialty || '') ? 'selected' : ''}>سكرتاريا واستقبال</option>
+      <option value="other">أخرى</option></select></div>
     <div><label>بداية الدوام</label><input name="work_start" type="time" required value="${hhmm(v.work_start)}"></div>
     <div><label>نهاية الدوام</label><input name="work_end" type="time" required value="${hhmm(v.work_end)}"></div>
     <div><label>مهلة التأخير (دقائق)</label><input name="grace_minutes" type="number" min="0" value="${v.grace_minutes}"></div>
@@ -66,6 +72,12 @@ async function openEmployee(ctx, emp, done) {
       user_id: f.user_id || null, notes: N.cleanText(f.notes) || null, active: !!f.active };
     const res = emp ? await sb.from('employees').update(rec).eq('id', emp.id).select().single() : await sb.from('employees').insert(rec).select().single();
     if (res.error) return toast(res.error.code === '23505' ? 'رقم الهوية أو حساب الدخول مستخدم لموظف آخر' : errMsg(res.error), 'bad');
+    // مزامنة الأطباء تلقائياً إذا كان الموظف طبيباً معالجاً
+    if ((f.clinic_role === 'doctor' || /طبيب|دكتور/i.test(rec.specialty || '')) && rec.active) {
+      const { data: exDoc } = await sb.from('doctors').select('id').eq('name', rec.full_name).maybeSingle();
+      if (!exDoc) await sb.from('doctors').insert({ name: rec.full_name });
+      await ctx.loadLookups();
+    }
     toast('تم الحفظ'); await done();
     if (emp) closeModal(); else openEmployee(ctx, res.data, done);   // بعد الإضافة تُفتح البطاقة لرفع الملفات
   };
