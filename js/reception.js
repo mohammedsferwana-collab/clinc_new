@@ -1,5 +1,5 @@
 import * as N from './normalize.js';
-import { esc, toast, openModal, closeModal, debounce, fmtDate, errMsg } from './ui.js';
+import { esc, toast, openModal, closeModal, debounce, fmtDate, errMsg, fetchAll } from './ui.js';
 import { exportBar } from './export.js';
 
 const STATUS = { waiting: ['بانتظار الطبيب', 'wait'], seen: ['تمت المعاينة', 'ok'] };
@@ -123,31 +123,77 @@ async function openPatient(ctx, p, done) {
   };
 }
 
-/* ============ العيادة (الطبيب) ============ */
-export function renderClinic(root, ctx) {
+/* ============ الزيارات: بحث وفلترة حسب العيادة والتاريخ والحالة، مع تصدير ============ */
+const isoAgo = n => { const d = new Date(); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const SHOW_MAX = 300;
+
+export function renderVisits(root, ctx) {
   const { sb } = ctx;
-  root.innerHTML = `<header class="pagehead"><h1>العيادة</h1><div class="row">
-    <div><label>العيادة</label><select id="cl"><option value="">كل العيادات</option>${ctx.clinics.map(c => `<option>${esc(c.name)}</option>`).join('')}</select></div>
-    <div><label>التاريخ</label><input type="date" id="dt" value="${N.todayISO()}"></div></div></header><div id="list"></div>`;
-  const cl = root.querySelector('#cl'), dt = root.querySelector('#dt');
-  cl.value = localStorage.getItem('clinic') || '';
+  const today = N.todayISO();
+  let rows = [], shown = [], clinic = localStorage.getItem('visits_clinic') || '';
+  root.innerHTML = `<header class="pagehead"><h1>الزيارات</h1><span id="bar"></span></header>
+    <div class="panel noprint"><div class="row">
+      <div style="flex:1;min-width:240px"><label>بحث</label><input id="q" type="search" placeholder="اسم المراجع أو الهوية أو الجوال أو التشخيص أو العلاج" autocomplete="off"></div>
+      <div><label>من تاريخ</label><input type="date" id="d1" value="${today}"></div>
+      <div><label>إلى تاريخ</label><input type="date" id="d2" value="${today}"></div>
+      <div><label>الحالة</label><select id="st"><option value="">الكل</option><option value="waiting">بانتظار الطبيب</option><option value="seen">تمت المعاينة</option></select></div></div>
+      <div class="chips" id="quick" style="margin-top:.7rem"><button class="chip" data-r="0,0">اليوم</button><button class="chip" data-r="1,1">أمس</button><button class="chip" data-r="6,0">آخر 7 أيام</button><button class="chip" data-r="m">هذا الشهر</button></div></div>
+    <div class="chips" id="clinics" style="margin-bottom:.8rem"></div><div id="count" class="muted" style="margin-bottom:.5rem"></div><div id="list"></div>`;
+  const $ = id => root.querySelector('#' + id);
+
   async function load() {
-    localStorage.setItem('clinic', cl.value);
-    let qb = sb.from('visits').select('id,clinic,status,created_at,diagnosis,patients(full_name,birth_date,gender)').eq('visit_date', dt.value).order('created_at');
-    if (cl.value) qb = qb.eq('clinic', cl.value);
-    const { data, error } = await qb;
-    if (error) return toast(errMsg(error), 'bad');
-    data.sort((a, b) => (a.status === b.status ? 0 : a.status === 'waiting' ? -1 : 1));
-    root.querySelector('#list').innerHTML = data.length
-      ? `<div class="tablewrap"><table><thead><tr><th>المراجع</th><th>العمر</th><th>العيادة</th><th>التشخيص</th><th>الحالة</th></tr></thead><tbody>${data.map(v =>
-          `<tr class="click" data-id="${v.id}"><td>${esc(v.patients.full_name)}</td><td>${N.ageText(v.patients.birth_date, dt.value)}</td><td>${esc(v.clinic || '—')}</td><td>${esc(v.diagnosis || '—')}</td>
-          <td><span class="badge ${STATUS[v.status][1]}">${STATUS[v.status][0]}</span></td></tr>`).join('')}</tbody></table></div>`
-      : '<div class="panel empty">لا توجد زيارات لهذا اليوم والعيادة.</div>';
+    let a = $('d1').value || today, b = $('d2').value || a;
+    if (a > b) [a, b] = [b, a];
+    const st = $('st').value;
+    try {
+      rows = await fetchAll(() => {
+        let q = sb.from('visits').select('id,visit_date,clinic,doctor_name,case_type,status,diagnosis,legacy_prescription,created_at,patients(full_name,national_id,phone,gender,birth_date),visit_items(drug_text,qty)')
+          .gte('visit_date', a).lte('visit_date', b).order('visit_date', { ascending: false }).order('created_at').order('id');
+        return st ? q.eq('status', st) : q;
+      });
+    } catch (e) { return toast(errMsg(e), 'bad'); }
+    draw();
   }
-  cl.onchange = dt.onchange = load;
-  root.querySelector('#list').onclick = e => { const tr = e.target.closest('tr[data-id]'); if (tr) openVisit(ctx, tr.dataset.id, load); };
+
+  function draw() {
+    const t = N.arNorm($('q').value);
+    const base = rows.filter(v => !t || N.arNorm([v.patients?.full_name, v.patients?.national_id, v.patients?.phone, v.diagnosis, v.doctor_name, treatmentText(v)].join(' ')).includes(t));
+    const counts = new Map();
+    base.forEach(v => { const c = v.clinic || 'بدون عيادة'; counts.set(c, (counts.get(c) || 0) + 1); });
+    const names = [...ctx.clinics.map(c => c.name), ...(counts.has('بدون عيادة') ? ['بدون عيادة'] : [])];
+    $('clinics').innerHTML = `<button class="chip ${clinic ? '' : 'on'}" data-c="">الكل ${base.length}</button>` +
+      names.map(n => `<button class="chip ${clinic === n ? 'on' : ''}" data-c="${esc(n)}">${esc(n)} ${counts.get(n) || 0}</button>`).join('');
+    shown = base.filter(v => !clinic || (v.clinic || 'بدون عيادة') === clinic);
+    $('count').textContent = shown.length > SHOW_MAX ? `${shown.length} زيارة — تُعرض أول ${SHOW_MAX}؛ ضيّق البحث أو صدّر الكل` : `${shown.length} زيارة`;
+    $('list').innerHTML = shown.length
+      ? `<div class="tablewrap"><table><thead><tr><th>التاريخ</th><th>المراجع</th><th>العمر</th><th>العيادة</th><th>الطبيب</th><th>التشخيص</th><th>العلاج</th><th>الحالة</th></tr></thead><tbody>${shown.slice(0, SHOW_MAX).map(v =>
+          `<tr class="click" data-id="${v.id}"><td>${fmtDate(v.visit_date)}</td><td>${esc(v.patients?.full_name)}</td><td>${N.ageText(v.patients?.birth_date, v.visit_date)}</td><td>${esc(v.clinic || '—')}</td><td>${esc(v.doctor_name || '—')}</td>
+          <td>${esc(v.diagnosis || '—')}</td><td>${esc(treatmentText(v))}</td><td><span class="badge ${STATUS[v.status][1]}">${STATUS[v.status][0]}</span></td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="panel empty">لا توجد زيارات مطابقة. غيّر التاريخ أو العيادة أو كلمة البحث.</div>';
+  }
+
+  $('clinics').onclick = e => { const b = e.target.closest('.chip'); if (!b) return; clinic = b.dataset.c; localStorage.setItem('visits_clinic', clinic); draw(); };
+  $('quick').onclick = e => {
+    const b = e.target.closest('.chip'); if (!b) return;
+    if (b.dataset.r === 'm') { $('d1').value = today.slice(0, 8) + '01'; $('d2').value = today; }
+    else { const [x, y] = b.dataset.r.split(',').map(Number); $('d1').value = isoAgo(x); $('d2').value = isoAgo(y); }
+    load();
+  };
+  $('q').addEventListener('input', debounce(draw, 200));
+  $('d1').onchange = $('d2').onchange = $('st').onchange = load;
+  $('list').onclick = e => { const tr = e.target.closest('tr[data-id]'); if (tr) openVisit(ctx, tr.dataset.id, load); };
+
+  $('bar').append(exportBar(() => ({
+    title: 'سجل الزيارات',
+    subtitle: `من ${fmtDate($('d1').value)} إلى ${fmtDate($('d2').value)}${clinic ? ' — عيادة ' + clinic : ''}${$('q').value ? ' — بحث: ' + $('q').value : ''} — العدد ${shown.length}`,
+    filename: `زيارات-${$('d1').value}-${$('d2').value}`,
+    sections: [{ heading: 'الزيارات', columns: ['التاريخ', 'المراجع', 'الهوية', 'الجوال', 'العمر', 'الجنس', 'العيادة', 'الطبيب', 'نوع الحالة', 'التشخيص', 'العلاج', 'الحالة'],
+      rows: shown.map(v => [fmtDate(v.visit_date), v.patients?.full_name || '', v.patients?.national_id || '', v.patients?.phone || '', N.ageText(v.patients?.birth_date, v.visit_date),
+        v.patients?.gender || '', v.clinic || '', v.doctor_name || '', v.case_type || '', v.diagnosis || '', treatmentText(v) === '—' ? '' : treatmentText(v), STATUS[v.status][0]]) }],
+  })));
+
   load();
-  const t = setInterval(load, 20000);
+  const t = setInterval(() => { if ($('d2').value >= today && !document.querySelector('dialog[open]')) load(); }, 30000);
   ctx.cleanup = () => clearInterval(t);
 }
 
@@ -171,6 +217,12 @@ async function openVisit(ctx, id, done) {
     <div style="margin-top:1.2rem"><button class="btn primary">حفظ وإنهاء المعاينة</button></div></form>`, { wide: true });
   const items = body.querySelector('#items');
   if (!open.length) items.insertAdjacentHTML('beforeend', row());
+  if (!['admin', 'doctor'].includes(ctx.profile.role)) {          // الاستقبال: عرض فقط
+    body.querySelectorAll('#vf input, #vf button').forEach(el => (el.disabled = true));
+    body.querySelector('#vf > div:last-child').style.display = 'none';
+    body.querySelector('#add').style.display = 'none';
+    body.querySelector('h2').insertAdjacentHTML('afterend', '<p class="muted small">عرض فقط — التشخيص والوصفة يسجلهما الطبيب.</p>');
+  }
   body.querySelector('#add').onclick = () => items.insertAdjacentHTML('beforeend', row());
   items.onclick = e => { if (e.target.matches('button')) e.target.closest('.item-row').remove(); };
   body.querySelector('#vf').onsubmit = async e => {

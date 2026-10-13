@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { esc, toast, ROLES } from './ui.js';
-import { renderReception, renderClinic } from './reception.js';
+import { renderReception, renderVisits } from './reception.js';
 import { renderPharmacy } from './pharmacy.js';
 import { renderSettings } from './settings.js';
 import { renderReports } from './reports.js';
@@ -34,7 +34,7 @@ ctx.setSettings = s => { ctx.settings = s; ctx.paint(s); };
 
 const NAV = [
   ['reception', 'الاستقبال', renderReception, ['admin', 'reception']],
-  ['clinic', 'العيادة', renderClinic, ['admin', 'doctor']],
+  ['visits', 'الزيارات', renderVisits, ['admin', 'doctor', 'reception']],
   ['pharmacy', 'الصيدلية', renderPharmacy, ['admin', 'pharmacy']],
   ['attendance', 'الحضور والانصراف', renderAttendance, ['admin', 'reception', 'doctor', 'pharmacy']],
   ['reports', 'تقارير العيادة', renderReports, ['admin', 'reception', 'doctor', 'pharmacy']],
