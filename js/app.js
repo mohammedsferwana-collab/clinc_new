@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
-import { esc, toast, ROLES } from './ui.js';
+import { esc, toast, openModal, closeModal, errMsg, ROLES } from './ui.js';
 import { renderEstmara, renderSearch, renderVisits } from './reception.js';
 import { renderPharmacy } from './pharmacy.js';
 import { renderSettings } from './settings.js';
@@ -22,20 +22,79 @@ const ctx = { sb, profile: null, clinics: [], doctors: [], drugs: [], cleanup: n
 ctx.settings = await loadSettings(sb);
 applyTheme(ctx.settings);
 
+// تسميات الأدوار المعتمدة كما طلب المستخدم (دكتور، سكرتاريا، مدير...)
+const ROLE_TITLES = {
+  admin: 'مدير',
+  doctor: 'دكتور',
+  reception: 'سكرتاريا',
+  pharmacy: 'صيدلي'
+};
+
+// إنشاء وسم الصورة الشخصية للمستخدم
+function avatarHTML(user) {
+  if (user && user.avatar_url) {
+    return `<div class="avatar"><img src="${esc(user.avatar_url)}" alt=""></div>`;
+  }
+  const initial = ((user && user.full_name) || (user && user.username) || 'م').trim().slice(0, 1);
+  return `<div class="avatar">${esc(initial)}</div>`;
+}
+
+// أيقونة الوضع الليلي/الفاتح
+function themeIconHTML(mode) {
+  if (mode === 'dark') return '<span class="theme-icon">🌙</span>';
+  if (mode === 'light') return '<span class="theme-icon">☀️</span>';
+  return '<span class="theme-icon">💻</span>';
+}
+
+// ضغط وتصغير الصورة الشخصية في المتصفح لضمان سرعة التحميل وخفة التخزين
+export function compressAvatar(file, maxSize = 300) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let w = img.width, h = img.height;
+        if (w > h) {
+          if (w > maxSize) { h = Math.round(h * maxSize / w); w = maxSize; }
+        } else {
+          if (h > maxSize) { w = Math.round(w * maxSize / h); h = maxSize; }
+        }
+        canvas.width = w; canvas.height = h;
+        const c2d = canvas.getContext('2d');
+        c2d.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 // رسم الاسم والشعار في الواجهة
 const brandHTML = s => `${s.logo_url ? `<img src="${esc(s.logo_url)}" alt="">` : ''}<span>${esc(s.site_name)}</span>`;
 const printHead = s => `<b>${esc(s.site_name)}</b>${s.tagline ? ' — ' + esc(s.tagline) : ''}<br>${[s.address, s.phone].filter(Boolean).map(esc).join(' • ')}`;
+
 ctx.paint = s => {
   applyTheme(s);
   const b = document.querySelector('.side .brand'); if (b) b.innerHTML = brandHTML(s);
+  const tc = document.querySelector('.topbar-clinic');
+  if (tc) tc.innerHTML = `${s.logo_url ? `<img src="${esc(s.logo_url)}" style="height:26px;width:auto;border-radius:4px" alt="">` : ''} <b>${esc(s.site_name)}</b>`;
   const ph = document.querySelector('.printhead'); if (ph) ph.innerHTML = printHead(s);
-  const mb = document.getElementById('mode'); if (mb) mb.textContent = 'الوضع: ' + MODE_LABEL[currentMode(s)];
+  const topModeBtn = document.getElementById('topModeBtn');
+  if (topModeBtn) {
+    const m = currentMode(s);
+    topModeBtn.innerHTML = `${themeIconHTML(m)}<span class="theme-label">${MODE_LABEL[m]}</span>`;
+  }
 };
 ctx.setSettings = s => { ctx.settings = s; ctx.paint(s); };
 
 // شريط التنقل الرئيسي:
-// 1. أول صفحة: صفحة الاستمارة بدل الاستقبال
-// 2. ثانياً: صفحة البحث
+// - أول صفحة: صفحة الاستمارة
+// - ثانياً: صفحة البحث
+// - يندرج النسخ الاحتياطي أسفل الإعدادات مباشرة للمدير
 const NAV = [
   ['estmara', 'صفحة الاستمارة', renderEstmara, ['admin', 'reception']],
   ['search', 'صفحة البحث', renderSearch, ['admin', 'reception']],
@@ -104,6 +163,97 @@ function showLogin(msg = '') {
   };
 }
 
+// نافذة الملف الشخصي للمستخدم ورفع الصورة
+function openProfileModal(context, user) {
+  const body = openModal(`
+    <div style="text-align:center; padding:.5rem 0">
+      <div id="profAvatarWrap" style="display:inline-block; margin-bottom:.8rem; cursor:pointer" title="انقر لتغيير الصورة الشخصية">
+        <div class="avatar" style="width:84px; height:84px; font-size:2.2rem; margin:0 auto; border-width:3px">
+          ${user.avatar_url ? `<img src="${esc(user.avatar_url)}" id="profImg" alt="">` : `<span id="profInit">${esc(((user.full_name || user.username || 'م').trim().slice(0, 1)))}</span>`}
+        </div>
+        <div style="font-size:.84rem; color:var(--brand); margin-top:.4rem; font-weight:600">📷 تغيير الصورة الشخصية</div>
+      </div>
+      <input type="file" id="avatarFileInput" accept="image/png,image/jpeg,image/webp" style="display:none">
+
+      <h2 style="margin:0 0 .2rem">${esc(user.full_name || user.username)}</h2>
+      <div class="role-badge role-${user.role}" style="font-size:.85rem; padding:.15rem .75rem">
+        ${ROLE_TITLES[user.role] || ROLES[user.role]}
+      </div>
+      ${user.username ? `<p class="muted small" style="margin:.4rem 0">اسم المستخدم: <code>${esc(user.username)}</code></p>` : ''}
+    </div>
+
+    <div style="border-top:1px solid var(--line); margin-top:1.2rem; padding-top:1rem">
+      <h3>تغيير كلمة المرور الخاصة بك</h3>
+      <form id="myPwForm" class="row" style="gap:.6rem; align-items:flex-end">
+        <div style="flex:1">
+          <label>كلمة المرور الجديدة</label>
+          <input name="new_pw" type="password" minlength="6" required placeholder="6 خانات على الأقل">
+        </div>
+        <button class="btn primary" id="saveMyPwBtn">تحديث كلمة المرور</button>
+      </form>
+    </div>
+  `);
+
+  const avatarWrap = body.querySelector('#profAvatarWrap');
+  const fileInput = body.querySelector('#avatarFileInput');
+
+  avatarWrap.onclick = () => fileInput.click();
+
+  fileInput.onchange = async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    try {
+      toast('جارٍ معالجة ورفع الصورة...', 'wait');
+      const compressedDataUrl = await compressAvatar(file, 300);
+
+      // تحديث الملف الشخصي في قاعدة البيانات
+      const { error } = await context.sb.from('profiles').update({
+        avatar_url: compressedDataUrl
+      }).eq('id', user.id);
+
+      if (error) throw error;
+
+      // تحديث الكائن محلياً
+      user.avatar_url = compressedDataUrl;
+      context.profile.avatar_url = compressedDataUrl;
+
+      // تحديث العرض في النافذة والقائمة العلوية
+      const profImg = body.querySelector('#profImg');
+      if (profImg) {
+        profImg.src = compressedDataUrl;
+      } else {
+        const wrap = body.querySelector('.avatar');
+        wrap.innerHTML = `<img src="${compressedDataUrl}" id="profImg" alt="">`;
+      }
+
+      const topAvatar = document.querySelector('#userWidget .avatar');
+      if (topAvatar) topAvatar.innerHTML = `<img src="${compressedDataUrl}" alt="">`;
+
+      toast('تم تحديث صورتك الشخصية بنجاح!');
+    } catch (err) {
+      toast(errMsg(err), 'bad');
+    }
+  };
+
+  // تغيير كلمة المرور الذاتي
+  body.querySelector('#myPwForm').onsubmit = async e => {
+    e.preventDefault();
+    const btn = body.querySelector('#saveMyPwBtn');
+    btn.disabled = true;
+    const newPw = e.target.new_pw.value;
+
+    const { error } = await context.sb.auth.updateUser({ password: newPw });
+    if (error) {
+      btn.disabled = false;
+      return toast(errMsg(error), 'bad');
+    }
+
+    toast('تم تحديث كلمة المرور بنجاح');
+    closeModal();
+  };
+}
+
 async function boot() {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) return showLogin();
@@ -116,20 +266,88 @@ async function boot() {
   ctx.profile = p;
   await ctx.loadLookups();
   const items = NAV.filter(n => n[3].includes(p.role));
-  app.innerHTML = `<div class="shell"><nav class="side"><div class="brand">${brandHTML(ctx.settings)}</div>
-    ${items.map(n => `<a href="#/${n[0]}" data-k="${n[0]}">${n[1]}</a>`).join('')}
-    <div class="who">${esc(p.full_name)}<br>${ROLES[p.role]}<button id="mode" class="modebtn"></button><button id="out">تسجيل الخروج</button></div></nav><main><div class="printhead">${printHead(ctx.settings)}</div><div id="view"></div></main></div>`;
-  const mb = document.getElementById('mode');
-  mb.textContent = 'الوضع: ' + MODE_LABEL[currentMode(ctx.settings)];
-  mb.onclick = () => { const order = ['light', 'dark', 'auto']; setMode(order[(order.indexOf(currentMode(ctx.settings)) + 1) % 3], ctx.settings); mb.textContent = 'الوضع: ' + MODE_LABEL[currentMode(ctx.settings)]; };
-  document.getElementById('out').onclick = async () => { await sb.auth.signOut(); location.hash = ''; showLogin(); };
+
+  const curMode = currentMode(ctx.settings);
+  const todayArabic = new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+  app.innerHTML = `
+    <div class="shell">
+      <!-- القائمة الجانبية -->
+      <nav class="side">
+        <div class="brand">${brandHTML(ctx.settings)}</div>
+        ${items.map(n => `<a href="#/${n[0]}" data-k="${n[0]}">${n[1]}</a>`).join('')}
+      </nav>
+
+      <!-- العمود الرئيسي مع القائمة العلوية -->
+      <div class="main-col">
+        <!-- القائمة العلوية الحديثة (Top Bar) -->
+        <header class="topbar noprint">
+          <div class="topbar-right">
+            <span class="topbar-clinic">
+              ${ctx.settings.logo_url ? `<img src="${esc(ctx.settings.logo_url)}" style="height:26px;width:auto;border-radius:4px" alt="">` : ''}
+              <b>${esc(ctx.settings.site_name)}</b>
+            </span>
+            <span class="topbar-date">${todayArabic}</span>
+          </div>
+
+          <div class="topbar-left">
+            <!-- زر الوضع الليلي / الفاتح بتصميم محترف وأنيق -->
+            <button id="topModeBtn" class="theme-toggle-btn" title="تبديل الوضع (فاتح / ليلي / تلقائي)">
+              ${themeIconHTML(curMode)}
+              <span class="theme-label">${MODE_LABEL[curMode]}</span>
+            </button>
+
+            <!-- بطاقة المستخدم: الصورة الشخصية، الاسم، والدور -->
+            <div class="user-widget" id="userWidget" title="انقر لعرض الملف الشخصي وتغيير صورتك">
+              ${avatarHTML(p)}
+              <div class="user-info">
+                <span class="user-name">${esc(p.full_name || p.username)}</span>
+                <span class="role-badge role-${p.role}">${ROLE_TITLES[p.role] || ROLES[p.role]}</span>
+              </div>
+            </div>
+
+            <!-- زر تسجيل الخروج -->
+            <button id="topLogoutBtn" class="topbar-logout" title="تسجيل الخروج">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+              خروج
+            </button>
+          </div>
+        </header>
+
+        <main>
+          <div class="printhead">${printHead(ctx.settings)}</div>
+          <div id="view"></div>
+        </main>
+      </div>
+    </div>
+  `;
+
+  // تبديل الوضع الليلي والفاتح من القائمة العلوية
+  const topModeBtn = document.getElementById('topModeBtn');
+  topModeBtn.onclick = () => {
+    const order = ['light', 'dark', 'auto'];
+    const next = order[(order.indexOf(currentMode(ctx.settings)) + 1) % 3];
+    setMode(next, ctx.settings);
+    topModeBtn.innerHTML = `${themeIconHTML(next)}<span class="theme-label">${MODE_LABEL[next]}</span>`;
+  };
+
+  // فتح الملف الشخصي ورفع الصورة عند النقر على ويدجت المستخدم
+  document.getElementById('userWidget').onclick = () => openProfileModal(ctx, p);
+
+  // تسجيل الخروج
+  document.getElementById('topLogoutBtn').onclick = async () => {
+    await sb.auth.signOut();
+    location.hash = '';
+    showLogin();
+  };
+
   window.onhashchange = () => route(items);
   route(items);
 }
 
 function route(items) {
   const hash = location.hash.slice(2);
-  const key = hash.split('?')[0]; // دعم المعلمات مثل #/estmara?id=...
+  const key = hash.split('?')[0];
   const page = items.find(n => n[0] === key) || items[0];
   if (ctx.cleanup) { ctx.cleanup(); ctx.cleanup = null; }
   document.querySelectorAll('.side a').forEach(a => a.classList.toggle('on', a.dataset.k === page[0]));

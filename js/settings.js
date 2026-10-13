@@ -2,6 +2,7 @@ import { esc, toast, openModal, closeModal, errMsg, ROLES } from './ui.js';
 import * as N from './normalize.js';
 import { PRESETS, MODE_LABEL, withLogo } from './theme.js';
 import { executeBackup } from './backup.js';
+import { compressAvatar } from './app.js';
 
 const DAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 
@@ -42,7 +43,7 @@ export async function renderSettings(root, ctx) {
         <div><label>حجم الخط</label><select id="g_font">${[['small', 'صغير'], ['normal', 'عادي'], ['large', 'كبير']].map(([k, l]) => `<option value="${k}" ${s.font_scale === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
         <div><label>الوضع الافتراضي للمستخدمين الجدد</label><select id="g_mode">${Object.entries(MODE_LABEL).map(([k, l]) => `<option value="${k}" ${s.default_mode === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       </div>
-      <p class="muted small">كل مستخدم يستطيع تبديل الوضع الليلي لنفسه من زر «الوضع» أسفل القائمة الجانبية. التغييرات هنا تُعاين فوراً ولا تُحفظ للجميع إلا بالضغط على «حفظ الإعدادات».</p>
+      <p class="muted small">كل مستخدم يستطيع تبديل الوضع الليلي لنفسه من زر «الوضع» أعلى الشاشة في القائمة العلوية. التغييرات هنا تُعاين فوراً ولا تُحفظ للجميع إلا بالضغط على «حفظ الإعدادات».</p>
       <h3>أيام الدوام (تُستخدم في احتساب الغياب)</h3>
       <div class="row">${DAYS.map((d, i) => `<label style="margin:0;display:flex;gap:.3rem;align-items:center;color:var(--ink)"><input type="checkbox" class="wd" value="${i}" style="width:auto" ${s.work_days.includes(i) ? 'checked' : ''}>${d}</label>`).join('')}</div>
       <div class="row" style="margin-top:1rem"><button class="btn primary" id="g_save">حفظ الإعدادات</button><button class="btn" id="g_reset">تراجع عن التعديلات</button></div></div>
@@ -56,6 +57,7 @@ export async function renderSettings(root, ctx) {
         <table>
           <thead>
             <tr>
+              <th style="width:48px; text-align:center">الصورة</th>
               <th>الاسم الكامل</th>
               <th>اسم المستخدم</th>
               <th>الدور والصلاحية</th>
@@ -65,18 +67,28 @@ export async function renderSettings(root, ctx) {
           </thead>
           <tbody id="usersTbody">
             ${(users || []).map(u => `<tr data-id="${u.id}">
+              <td style="width:48px; text-align:center">
+                <div class="avatar" style="width:34px; height:34px; font-size:.95rem; margin:0 auto; cursor:pointer" data-act="uploadAvatar" title="تغيير صورة هذا المستخدم">
+                  ${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="">` : esc((u.full_name || u.username || 'م').trim().slice(0, 1))}
+                </div>
+              </td>
               <td><input class="nm" value="${esc(u.full_name)}"></td>
               <td><code style="background:var(--bg); padding:3px 8px; border-radius:var(--r); font-weight:600">${esc(u.username || '—')}</code></td>
               <td><select class="rl">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${u.role === k ? 'selected' : ''}>${v}</option>`).join('')}</select></td>
               <td><input type="checkbox" class="ac" ${u.active ? 'checked' : ''} ${u.id === ctx.profile.id ? 'disabled' : ''} style="width:auto"></td>
-              <td><button class="btn sm" data-act="resetPw" title="تغيير كلمة المرور لهذا المستخدم">تغيير كلمة المرور</button></td>
+              <td class="row" style="gap:.25rem; flex-wrap:nowrap">
+                <button class="btn sm" data-act="uploadAvatar" title="رفع صورة شخصية">📷 الصورة</button>
+                <button class="btn sm" data-act="resetPw" title="تغيير كلمة المرور لهذا المستخدم">كلمة المرور</button>
+              </td>
             </tr>`).join('')}
           </tbody>
         </table>
       </div>
-      <p class="muted small" style="margin-top:.6rem">يمكن للمدير إضافة مستخدمين جدد مباشرة باسم مستخدم وكلمة مرور دون الحاجة لبريد إلكتروني، كما يمكن تغيير كلمة المرور لأي موظف.</p>
+      <input type="file" id="tableAvatarInput" accept="image/png,image/jpeg,image/webp" style="display:none">
+      <p class="muted small" style="margin-top:.6rem">يمكن للمدير رفع وتغيير الصورة الشخصية لأي مستخدم، وتغيير كلمة المرور أو إنشاء حساب جديد مباشرة.</p>
     </div>
 
+    <!-- قسم النسخ الاحتياطي أسفل الإعدادات -->
     <div class="panel">
       <h2>النسخ الاحتياطي لقاعدة البيانات</h2>
       <p>أخذ نسخة احتياطية فورية وشاملة لكافة بيانات المركز (المرضى، الزيارات، الأدوية، الموظفين، الحضور، الإعدادات) وتصديرها بصيغتي Excel و JSON.</p>
@@ -182,7 +194,33 @@ export async function renderSettings(root, ctx) {
       openAddUserModal(unlinkedEmps);
     };
 
-    // تغيير كلمة المرور أو تعديل بيانات المستخدم
+    // تغيير صورة المستخدم من الجدول
+    let targetUserForAvatar = null;
+    const tableAvatarInput = root.querySelector('#tableAvatarInput');
+    tableAvatarInput.onchange = async e => {
+      const file = e.target.files[0];
+      if (!file || !targetUserForAvatar) return;
+      try {
+        toast('جارٍ معالجة ورفع الصورة...', 'wait');
+        const compressed = await compressAvatar(file, 300);
+        const { error } = await sb.from('profiles').update({ avatar_url: compressed }).eq('id', targetUserForAvatar.id);
+        if (error) throw error;
+        toast('تم تحديث الصورة بنجاح');
+        if (targetUserForAvatar.id === ctx.profile.id) {
+          ctx.profile.avatar_url = compressed;
+          const topAv = document.querySelector('#userWidget .avatar');
+          if (topAv) topAv.innerHTML = `<img src="${compressed}" alt="">`;
+        }
+        draw();
+      } catch (err) {
+        toast(errMsg(err), 'bad');
+      } finally {
+        tableAvatarInput.value = '';
+        targetUserForAvatar = null;
+      }
+    };
+
+    // تعديل بيانات المستخدم أو تغيير كلمة المرور أو رفع الصورة
     const utbody = root.querySelector('#usersTbody');
     utbody.onchange = async e => {
       const tr = e.target.closest('tr');
@@ -196,11 +234,18 @@ export async function renderSettings(root, ctx) {
     };
 
     utbody.onclick = async e => {
-      const btn = e.target.closest('button[data-act="resetPw"]');
+      const btn = e.target.closest('[data-act]');
       if (!btn) return;
       const tr = btn.closest('tr');
       const u = (users || []).find(x => x.id === tr?.dataset.id);
-      if (u) openResetPasswordModal(u);
+      if (!u) return;
+
+      if (btn.dataset.act === 'resetPw') {
+        openResetPasswordModal(u);
+      } else if (btn.dataset.act === 'uploadAvatar') {
+        targetUserForAvatar = u;
+        tableAvatarInput.click();
+      }
     };
 
     root.querySelectorAll('form[data-t]').forEach(f => f.onsubmit = async e => {
@@ -213,8 +258,19 @@ export async function renderSettings(root, ctx) {
 
   // نافذة إضافة مستخدم جديد بواسطة المدير
   function openAddUserModal(unlinkedEmps) {
+    let chosenAvatarData = null;
     const body = openModal(`<h2>إضافة مستخدم جديد للنظام</h2>
       <form id="addUserForm" class="grid">
+        <div style="grid-column:1/-1; text-align:center">
+          <div id="newAvPreview" style="display:inline-block; cursor:pointer" title="اختيار صورة شخصية للمستخدم">
+            <div class="avatar" style="width:68px; height:68px; font-size:1.8rem; margin:0 auto; border-width:2px">
+              👤
+            </div>
+            <div style="font-size:.82rem; color:var(--brand); margin-top:.3rem; font-weight:600">📷 اختيار صورة (اختياري)</div>
+          </div>
+          <input type="file" id="newAvInput" accept="image/png,image/jpeg,image/webp" style="display:none">
+        </div>
+
         <div style="grid-column:1/-1">
           <label>الاسم الكامل *</label>
           <input name="full_name" required placeholder="مثال: د. أحمد محمد أو سارة علي">
@@ -245,6 +301,21 @@ export async function renderSettings(root, ctx) {
           <button class="btn primary" id="saveUserBtn" style="width:100%">إنشاء حساب المستخدم وتفعيله</button>
         </div>
       </form>`);
+
+    const newAvPreview = body.querySelector('#newAvPreview');
+    const newAvInput = body.querySelector('#newAvInput');
+    newAvPreview.onclick = () => newAvInput.click();
+
+    newAvInput.onchange = async e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        chosenAvatarData = await compressAvatar(file, 300);
+        newAvPreview.querySelector('.avatar').innerHTML = `<img src="${chosenAvatarData}" alt="">`;
+      } catch (err) {
+        toast('تعذر قراءة الصورة', 'bad');
+      }
+    };
 
     body.querySelector('#addUserForm').onsubmit = async e => {
       e.preventDefault();
@@ -295,6 +366,11 @@ export async function renderSettings(root, ctx) {
             active: true
           });
         }
+      }
+
+      // حفظ الصورة إن تم اختيارها
+      if (createdUserId && chosenAvatarData) {
+        await sb.from('profiles').update({ avatar_url: chosenAvatarData }).eq('id', createdUserId);
       }
 
       if (f.employee_id && createdUserId) {

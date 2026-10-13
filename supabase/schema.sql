@@ -8,6 +8,7 @@ create table if not exists profiles (
   id uuid primary key references auth.users on delete cascade,
   full_name text not null default '',
   username text unique,
+  avatar_url text,
   role text not null default 'reception' check (role in ('admin','reception','doctor','pharmacy')),
   active boolean not null default true,
   created_at timestamptz not null default now()
@@ -159,8 +160,9 @@ begin
 end $$;
 
 drop policy if exists admin_profiles on profiles;
+drop policy if exists admin_profiles on profiles;
 create policy admin_profiles on profiles for update to authenticated
-  using (my_role() = 'admin') with check (my_role() = 'admin');
+  using (id = auth.uid() or my_role() = 'admin') with check (id = auth.uid() or my_role() = 'admin');
 
 drop policy if exists w_clinics on clinics;
 create policy w_clinics on clinics for all to authenticated using (my_role() = 'admin') with check (my_role() = 'admin');

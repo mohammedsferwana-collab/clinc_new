@@ -1,8 +1,9 @@
--- المرحلة الرابعة: تسجيل الدخول باسم المستخدم دون إيميل، إضافة المستخدمين بواسطة المدير، وصلاحيات الحذف والتعديل
+-- المرحلة الرابعة: تسجيل الدخول باسم المستخدم دون إيميل، إضافة المستخدمين بواسطة المدير، وصلاحيات الحذف والتعديل والصورة الشخصية
 -- شغّل هذا الملف في Supabase: SQL Editor ← New query ← Run
 
--- 1. إضافة عمود اسم المستخدم في جدول profiles
+-- 1. إضافة عمود اسم المستخدم وعمود الصورة الشخصية في جدول profiles
 alter table profiles add column if not exists username text;
+alter table profiles add column if not exists avatar_url text;
 create unique index if not exists profiles_username_idx on profiles (lower(username)) where username is not null;
 
 -- تعيين اسم مستخدم افتراضي للحسابات الحالية من البريد الإلكتروني
@@ -166,3 +167,12 @@ drop policy if exists u_moves on stock_movements;
 create policy u_moves on stock_movements for update to authenticated
   using (my_role() in ('admin','pharmacy'))
   with check (my_role() in ('admin','pharmacy'));
+
+-- 7. إتاحة تحديث المستخدم لملفه الشخصي وتغيير صورته
+drop policy if exists update_own_profile on profiles;
+create policy update_own_profile on profiles for update to authenticated
+  using (id = auth.uid() or my_role() = 'admin')
+  with check (id = auth.uid() or my_role() = 'admin');
+
+-- 8. تنظيف الأطباء غير المعتمدين (مثل علي وغلي)
+delete from doctors where name in ('علي', 'غلي');
