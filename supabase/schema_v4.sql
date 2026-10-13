@@ -1,4 +1,4 @@
--- المرحلة الرابعة: تسجيل الدخول باسم المستخدم دون إيميل، إضافة المستخدمين بواسطة المدير، وصلاحيات الحذف والتعديل والصورة الشخصية
+-- المرحلة الرابعة: تسجيل الدخول باسم المستخدم دون إيميل، إضافة وحذف وتعديل الموظفين والحسابات بالكامل، وصلاحيات الحذف والتعديل والصورة الشخصية
 -- شغّل هذا الملف في Supabase: SQL Editor ← New query ← Run
 
 -- 1. إضافة عمود اسم المستخدم وعمود الصورة الشخصية في جدول profiles
@@ -176,3 +176,49 @@ create policy update_own_profile on profiles for update to authenticated
 
 -- 8. تنظيف الأطباء غير المعتمدين (مثل علي وغلي)
 delete from doctors where name in ('علي', 'غلي');
+
+-- 9. دالة للمدير لحذف موظف ومستخدمه نهائياً
+create or replace function admin_delete_user(p_user_id uuid) returns void
+language plpgsql security definer set search_path = auth, public as $$
+begin
+  if (select role from public.profiles where id = auth.uid() and active) <> 'admin' then
+    raise exception 'غير مصرح: صلاحية مدير مطلوبة';
+  end if;
+  if p_user_id = auth.uid() then
+    raise exception 'لا يمكنك حذف حسابك الحالي المسجل به الدخول';
+  end if;
+  -- حذف سجل الموظف إن وجد
+  delete from public.employees where user_id = p_user_id;
+  -- حذف المستخدم من auth.users (يتسلسل الحذف إلى profiles)
+  delete from auth.users where id = p_user_id;
+end $$;
+grant execute on function admin_delete_user(uuid) to authenticated;
+
+-- 10. دالة للمدير لتعديل بيانات المستخدم ودوره واسم دخوله وصورته
+create or replace function admin_update_user(
+  p_user_id uuid,
+  p_username text,
+  p_full_name text,
+  p_role text,
+  p_active boolean default true,
+  p_avatar_url text default null
+) returns void
+language plpgsql security definer set search_path = auth, public as $$
+begin
+  if (select role from public.profiles where id = auth.uid() and active) <> 'admin' then
+    raise exception 'غير مصرح: صلاحية مدير مطلوبة';
+  end if;
+
+  update public.profiles
+  set username = lower(trim(p_username)),
+      full_name = p_full_name,
+      role = p_role,
+      active = p_active,
+      avatar_url = coalesce(p_avatar_url, avatar_url)
+  where id = p_user_id;
+
+  update auth.users
+  set raw_user_meta_data = jsonb_build_object('full_name', p_full_name, 'username', lower(trim(p_username)), 'role', p_role)
+  where id = p_user_id;
+end $$;
+grant execute on function admin_update_user(uuid, text, text, text, boolean, text) to authenticated;

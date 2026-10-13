@@ -46,7 +46,7 @@ function themeIconHTML(mode) {
   return '<span class="theme-icon">💻</span>';
 }
 
-// ضغط وتصغير الصورة الشخصية في المتصفح لضمان سرعة التحميل وخفة التخزين
+// ضغط وتصغير الصورة الشخصية في المتصفح لضمان خفة التخزين والسرعة
 export function compressAvatar(file, maxSize = 300) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -88,13 +88,23 @@ ctx.paint = s => {
     const m = currentMode(s);
     topModeBtn.innerHTML = `${themeIconHTML(m)}<span class="theme-label">${MODE_LABEL[m]}</span>`;
   }
+  const topUserWidget = document.getElementById('userWidget');
+  if (topUserWidget && ctx.profile) {
+    topUserWidget.innerHTML = `
+      ${avatarHTML(ctx.profile)}
+      <div class="user-info">
+        <span class="user-name">${esc(ctx.profile.full_name || ctx.profile.username)}</span>
+        <span class="role-badge role-${ctx.profile.role}">${ROLE_TITLES[ctx.profile.role] || ROLES[ctx.profile.role]}</span>
+      </div>
+    `;
+  }
 };
 ctx.setSettings = s => { ctx.settings = s; ctx.paint(s); };
 
 // شريط التنقل الرئيسي:
 // - أول صفحة: صفحة الاستمارة
 // - ثانياً: صفحة البحث
-// - يندرج النسخ الاحتياطي أسفل الإعدادات مباشرة للمدير
+// - الإعدادات المنسدلة (تتضمن الاستيراد والنسخ الاحتياطي)
 const NAV = [
   ['estmara', 'صفحة الاستمارة', renderEstmara, ['admin', 'reception']],
   ['search', 'صفحة البحث', renderSearch, ['admin', 'reception']],
@@ -102,10 +112,11 @@ const NAV = [
   ['pharmacy', 'الصيدلية', renderPharmacy, ['admin', 'pharmacy']],
   ['attendance', 'الحضور والانصراف', renderAttendance, ['admin', 'reception', 'doctor', 'pharmacy']],
   ['reports', 'تقارير العيادة', renderReports, ['admin', 'reception', 'doctor', 'pharmacy']],
-  ['employees', 'الموظفون', renderEmployees, ['admin']],
+  ['employees', 'الموظفون والحسابات', renderEmployees, ['admin']],
   ['assets', 'العهد', renderAssets, ['admin']],
-  ['import', 'استيراد من إكسل', renderImport, ['admin']],
-  ['settings', 'الإعدادات', renderSettings, ['admin']],
+  // عناصر الإعدادات المنسدلة:
+  ['settings', 'الإعدادات العامة', renderSettings, ['admin']],
+  ['import', 'الاستيراد من إكسل', renderImport, ['admin']],
   ['backup', 'النسخ الاحتياطي', renderBackup, ['admin']],
 ];
 
@@ -132,7 +143,7 @@ ctx.loadLookups = async () => {
   ctx.drugs = g.data || [];
 };
 
-// شاشة تسجيل الدخول مع ظهور الشعار واسم المركز بتصميم أنيق
+// شاشة تسجيل الدخول
 function showLogin(msg = '') {
   const logoHTML = ctx.settings.logo_url
     ? `<div class="login-logo-wrap"><img class="logo" src="${esc(ctx.settings.logo_url)}" alt="${esc(ctx.settings.site_name)}"></div>`
@@ -228,11 +239,9 @@ function openProfileModal(context, user) {
 
       if (error) throw error;
 
-      // تحديث الكائن محلياً
       user.avatar_url = compressedDataUrl;
       context.profile.avatar_url = compressedDataUrl;
 
-      // تحديث العرض في النافذة والقائمة العلوية
       const profImg = body.querySelector('#profImg');
       if (profImg) {
         profImg.src = compressedDataUrl;
@@ -241,16 +250,13 @@ function openProfileModal(context, user) {
         wrap.innerHTML = `<img src="${compressedDataUrl}" id="profImg" alt="">`;
       }
 
-      const topAvatar = document.querySelector('#userWidget .avatar');
-      if (topAvatar) topAvatar.innerHTML = `<img src="${compressedDataUrl}" alt="">`;
-
+      context.paint(context.settings);
       toast('تم تحديث صورتك الشخصية بنجاح!');
     } catch (err) {
       toast(errMsg(err), 'bad');
     }
   };
 
-  // تغيير كلمة المرور الذاتي
   body.querySelector('#myPwForm').onsubmit = async e => {
     e.preventDefault();
     const btn = body.querySelector('#saveMyPwBtn');
@@ -279,17 +285,47 @@ async function boot() {
   }
   ctx.profile = p;
   await ctx.loadLookups();
-  const items = NAV.filter(n => n[3].includes(p.role));
 
   const curMode = currentMode(ctx.settings);
   const todayArabic = new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const isAdmin = p.role === 'admin';
+
+  // الروابط الرئيسية المعتادة
+  const mainItems = [
+    ['estmara', 'صفحة الاستمارة', renderEstmara, ['admin', 'reception']],
+    ['search', 'صفحة البحث', renderSearch, ['admin', 'reception']],
+    ['visits', 'الزيارات', renderVisits, ['admin', 'doctor', 'reception']],
+    ['pharmacy', 'الصيدلية', renderPharmacy, ['admin', 'pharmacy']],
+    ['attendance', 'الحضور والانصراف', renderAttendance, ['admin', 'reception', 'doctor', 'pharmacy']],
+    ['reports', 'تقارير العيادة', renderReports, ['admin', 'reception', 'doctor', 'pharmacy']],
+    ['employees', 'الموظفون والحسابات', renderEmployees, ['admin']],
+    ['assets', 'العهد', renderAssets, ['admin']]
+  ].filter(n => n[3].includes(p.role));
 
   app.innerHTML = `
     <div class="shell">
       <!-- القائمة الجانبية -->
       <nav class="side">
         <div class="brand">${brandHTML(ctx.settings)}</div>
-        ${items.map(n => `<a href="#/${n[0]}" data-k="${n[0]}">${n[1]}</a>`).join('')}
+        
+        <div class="nav-links">
+          ${mainItems.map(n => `<a href="#/${n[0]}" data-k="${n[0]}">${n[1]}</a>`).join('')}
+
+          ${isAdmin ? `
+            <!-- قائمة الإعدادات المنسدلة: الإعدادات، الاستيراد من إكسل، والنسخ الاحتياطي -->
+            <div class="nav-dropdown" id="settingsNavGroup">
+              <button type="button" class="nav-dropdown-btn" id="settingsDropdownToggle">
+                <span>⚙️ الإعدادات</span>
+                <span class="dropdown-caret">▾</span>
+              </button>
+              <div class="nav-dropdown-menu">
+                <a href="#/settings" data-k="settings" class="sub-link">الإعدادات العامة</a>
+                <a href="#/import" data-k="import" class="sub-link">الاستيراد من إكسل</a>
+                <a href="#/backup" data-k="backup" class="sub-link">النسخ الاحتياطي</a>
+              </div>
+            </div>
+          ` : ''}
+        </div>
       </nav>
 
       <!-- العمود الرئيسي مع القائمة العلوية -->
@@ -336,6 +372,17 @@ async function boot() {
     </div>
   `;
 
+  // تبديل فتح/إغلاق القائمة المنسدلة للإعدادات
+  const settingsToggle = document.getElementById('settingsDropdownToggle');
+  const settingsGroup = document.getElementById('settingsNavGroup');
+  if (settingsToggle && settingsGroup) {
+    settingsToggle.onclick = () => {
+      const isOpen = settingsGroup.classList.toggle('open');
+      const caret = settingsGroup.querySelector('.dropdown-caret');
+      if (caret) caret.textContent = isOpen ? '▴' : '▾';
+    };
+  }
+
   // تبديل الوضع الليلي والفاتح من القائمة العلوية
   const topModeBtn = document.getElementById('topModeBtn');
   topModeBtn.onclick = () => {
@@ -345,7 +392,7 @@ async function boot() {
     topModeBtn.innerHTML = `${themeIconHTML(next)}<span class="theme-label">${MODE_LABEL[next]}</span>`;
   };
 
-  // فتح الملف الشخصي ورفع الصورة عند النقر على ويدجت المستخدم
+  // فتح الملف الشخصي ورفع الصورة
   document.getElementById('userWidget').onclick = () => openProfileModal(ctx, p);
 
   // تسجيل الخروج
@@ -355,16 +402,33 @@ async function boot() {
     showLogin();
   };
 
-  window.onhashchange = () => route(items);
-  route(items);
+  const allItems = NAV.filter(n => n[3].includes(p.role));
+  window.onhashchange = () => route(allItems);
+  route(allItems);
 }
 
 function route(items) {
   const hash = location.hash.slice(2);
-  const key = hash.split('?')[0];
+  const key = hash.split('?')[0] || items[0][0];
   const page = items.find(n => n[0] === key) || items[0];
   if (ctx.cleanup) { ctx.cleanup(); ctx.cleanup = null; }
-  document.querySelectorAll('.side a').forEach(a => a.classList.toggle('on', a.dataset.k === page[0]));
+
+  // تحديث تمييز الرابط النشط
+  document.querySelectorAll('.side a').forEach(a => {
+    a.classList.toggle('on', a.dataset.k === page[0]);
+  });
+
+  // إذا كانت الصفحة ضمن قائمة الإعدادات المنسدلة (إعدادات، استيراد، نسخ احتياطي)، نفتح القائمة تلقائياً
+  const group = document.getElementById('settingsNavGroup');
+  if (group) {
+    const isSub = ['settings', 'import', 'backup'].includes(page[0]);
+    if (isSub) {
+      group.classList.add('open');
+      const caret = group.querySelector('.dropdown-caret');
+      if (caret) caret.textContent = '▴';
+    }
+  }
+
   const view = document.getElementById('view');
   try { page[2](view, ctx); } catch (e) { console.error(e); toast('تعذر فتح الصفحة', 'bad'); }
 }

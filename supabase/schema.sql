@@ -307,3 +307,45 @@ begin
   end if;
 end $$;
 grant execute on function admin_set_user_password(uuid, text) to authenticated;
+
+create or replace function admin_delete_user(p_user_id uuid) returns void
+language plpgsql security definer set search_path = auth, public as 7238
+begin
+  if (select role from public.profiles where id = auth.uid() and active) <> 'admin' then
+    raise exception 'غير مصرح: صلاحية مدير مطلوبة';
+  end if;
+  if p_user_id = auth.uid() then
+    raise exception 'لا يمكنك حذف حسابك الحالي المسجل به الدخول';
+  end if;
+  delete from public.employees where user_id = p_user_id;
+  delete from auth.users where id = p_user_id;
+end 7238;
+grant execute on function admin_delete_user(uuid) to authenticated;
+
+create or replace function admin_update_user(
+  p_user_id uuid,
+  p_username text,
+  p_full_name text,
+  p_role text,
+  p_active boolean default true,
+  p_avatar_url text default null
+) returns void
+language plpgsql security definer set search_path = auth, public as 7238
+begin
+  if (select role from public.profiles where id = auth.uid() and active) <> 'admin' then
+    raise exception 'غير مصرح: صلاحية مدير مطلوبة';
+  end if;
+
+  update public.profiles
+  set username = lower(trim(p_username)),
+      full_name = p_full_name,
+      role = p_role,
+      active = p_active,
+      avatar_url = coalesce(p_avatar_url, avatar_url)
+  where id = p_user_id;
+
+  update auth.users
+  set raw_user_meta_data = jsonb_build_object('full_name', p_full_name, 'username', lower(trim(p_username)), 'role', p_role)
+  where id = p_user_id;
+end 7238;
+grant execute on function admin_update_user(uuid, text, text, text, boolean, text) to authenticated;
