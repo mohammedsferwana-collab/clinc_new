@@ -1,13 +1,16 @@
-// دوال تنظيف وتوحيد البيانات (بدون اعتماد على المتصفح)
+// دوال تنظيف وتوحيد البيانات
 const AR = '٠١٢٣٤٥٦٧٨٩', FA = '۰۱۲۳۴۵۶۷۸۹';
 export const digits = s => String(s ?? '').replace(/[٠-٩]/g, d => AR.indexOf(d)).replace(/[۰-۹]/g, d => FA.indexOf(d));
 export const cleanText = s => String(s ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 export const arNorm = s => cleanText(digits(s)).toLowerCase().replace(/[أإآ]/g, 'ا').replace(/ى/g, 'ي');
 
+// حفظ الهوية كقيمة نصية للحفاظ على الأصفار الأولى
 export function cleanId(s) {
   const t = digits(cleanText(s)).replace(/\D/g, '');
   return t.length >= 6 ? t : null;
 }
+
+// حفظ الجوال كقيمة نصية
 export function cleanPhone(s) {
   let t = digits(cleanText(s)).replace(/\D/g, '');
   if (!t) return null;
@@ -21,6 +24,7 @@ const iso = (y, m, d) => {
   if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
   return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 };
+
 export function parseDate(v) {
   if (v == null || v === '') return null;
   if (v instanceof Date) return isNaN(v) ? null : iso(v.getFullYear(), v.getMonth() + 1, v.getDate());
@@ -35,12 +39,12 @@ export function parseDate(v) {
   if ((m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/))) return iso(+m[3], +m[2], +m[1]);
   return null;
 }
+
 export function todayISO() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// توحيد أسماء العيادات المكتوبة بصيغ مختلفة
 export function normClinic(raw) {
   const t = cleanText(raw).replace(/[أإآ]/g, 'ا').replace(/[ىی]/g, 'ي').replace(/ک/g, 'ك').replace(/[\s.+]/g, '');
   if (!t) return { clinic: null, doctor: null, known: false, empty: true };
@@ -52,31 +56,38 @@ export function normClinic(raw) {
   for (const [k, name] of rules) if (t.includes(k)) return { clinic: name, doctor: null, known: true };
   return { clinic: null, doctor: null, known: false };
 }
+
 export function normGender(v) {
   const t = cleanText(v);
   if (/ذكر/.test(t)) return 'ذكر';
   if (/انث|أنث/.test(t)) return 'أنثى';
   return null;
 }
+
 export function normCase(v) {
   const t = cleanText(v);
   return t.includes('جديد') ? 'جديد' : t.includes('مراجع') ? 'مراجع' : null;
 }
 
-// العمر
-export function ageParts(birth, on) {
+// حساب العمر الدقيق بالسنوات والأشهر في تاريخ الزيارة المحدد
+export function ageParts(birth, on = todayISO()) {
   if (!birth || !on) return null;
-  const [by, bm, bd] = birth.split('-').map(Number), [y, m, d] = on.split('-').map(Number);
-  let yrs = y - by, mon = m - bm;
+  const [by, bm, bd] = birth.split('-').map(Number);
+  const [y, m, d] = on.split('-').map(Number);
+  let yrs = y - by;
+  let mon = m - bm;
   if (d < bd) mon--;
   if (mon < 0) { yrs--; mon += 12; }
   return yrs < 0 ? null : { y: yrs, m: mon };
 }
+
 export function ageText(birth, on = todayISO()) {
   const a = ageParts(birth, on);
   if (!a) return '—';
-  return a.y < 1 ? `${a.m} شهر` : `${a.y} سنة`;
+  if (a.y === 0) return `${a.m} شهر`;
+  return a.m > 0 ? `${a.y} سنة و ${a.m} شهر` : `${a.y} سنة`;
 }
+
 export const AGE_GROUPS = ['أقل من 5 سنوات', '5–17 سنة', '18–59 سنة', '60 سنة فأكثر', 'غير معروف'];
 export function ageGroup(birth, on) {
   const a = ageParts(birth, on);
@@ -84,7 +95,6 @@ export function ageGroup(birth, on) {
   return a.y < 5 ? AGE_GROUPS[0] : a.y < 18 ? AGE_GROUPS[1] : a.y < 60 ? AGE_GROUPS[2] : AGE_GROUPS[3];
 }
 
-// حدود الفترة: يوم / أسبوع (من الأحد إلى السبت) / شهر
 export function periodRange(type, d) {
   const [y, m, da] = d.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, da));
