@@ -132,11 +132,25 @@ ctx.loadLookups = async () => {
   ctx.drugs = g.data || [];
 };
 
+// شاشة تسجيل الدخول مع ظهور الشعار واسم المركز بتصميم أنيق
 function showLogin(msg = '') {
-  app.innerHTML = `<form class="login" id="lf">${ctx.settings.logo_url ? `<img class="logo" src="${esc(ctx.settings.logo_url)}" alt="">` : ''}<h1>${esc(ctx.settings.site_name)}</h1>
-    <label for="em">اسم المستخدم أو البريد الإلكتروني</label><input id="em" type="text" required autocomplete="username" dir="ltr" placeholder="اسم المستخدم (مثال: ahmed)">
-    <label for="pw">كلمة المرور</label><input id="pw" type="password" required autocomplete="current-password" dir="ltr" placeholder="••••••••">
-    <p class="small" style="color:var(--bad)">${esc(msg)}</p><button class="btn primary" id="subBtn">دخول</button></form>`;
+  const logoHTML = ctx.settings.logo_url
+    ? `<div class="login-logo-wrap"><img class="logo" src="${esc(ctx.settings.logo_url)}" alt="${esc(ctx.settings.site_name)}"></div>`
+    : `<div class="login-logo-wrap default-logo" title="${esc(ctx.settings.site_name)}"><svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path><path d="M12 5v6"></path><path d="M9 8h6"></path></svg></div>`;
+
+  app.innerHTML = `
+    <form class="login" id="lf">
+      ${logoHTML}
+      <h1>${esc(ctx.settings.site_name)}</h1>
+      ${ctx.settings.tagline ? `<p class="login-tagline">${esc(ctx.settings.tagline)}</p>` : ''}
+      <label for="em">اسم المستخدم أو البريد الإلكتروني</label>
+      <input id="em" type="text" required autocomplete="username" dir="ltr" placeholder="اسم المستخدم (مثال: ahmed)">
+      <label for="pw">كلمة المرور</label>
+      <input id="pw" type="password" required autocomplete="current-password" dir="ltr" placeholder="••••••••">
+      <p class="small" style="color:var(--bad)">${esc(msg)}</p>
+      <button class="btn primary" id="subBtn">دخول للنظام</button>
+    </form>
+  `;
 
   document.getElementById('lf').onsubmit = async e => {
     e.preventDefault();
