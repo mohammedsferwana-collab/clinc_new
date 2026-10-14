@@ -22,15 +22,13 @@ const ctx = { sb, profile: null, clinics: [], doctors: [], drugs: [], cleanup: n
 ctx.settings = await loadSettings(sb);
 applyTheme(ctx.settings);
 
-// تسميات الأدوار المعتمدة كما طلب المستخدم (دكتور، سكرتاريا، مدير...)
 const ROLE_TITLES = {
-  admin: 'مدير',
+  admin: 'مدير النظام',
   doctor: 'دكتور',
   reception: 'سكرتاريا',
   pharmacy: 'صيدلي'
 };
 
-// إنشاء وسم الصورة الشخصية للمستخدم
 function avatarHTML(user) {
   if (user && user.avatar_url) {
     return `<div class="avatar"><img src="${esc(user.avatar_url)}" alt=""></div>`;
@@ -39,14 +37,12 @@ function avatarHTML(user) {
   return `<div class="avatar">${esc(initial)}</div>`;
 }
 
-// أيقونة الوضع الليلي/الفاتح
 function themeIconHTML(mode) {
   if (mode === 'dark') return '<span class="theme-icon">🌙</span>';
   if (mode === 'light') return '<span class="theme-icon">☀️</span>';
   return '<span class="theme-icon">💻</span>';
 }
 
-// ضغط وتصغير الصورة الشخصية في المتصفح لضمان خفة التخزين والسرعة
 export function compressAvatar(file, maxSize = 300) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -73,7 +69,6 @@ export function compressAvatar(file, maxSize = 300) {
   });
 }
 
-// رسم الاسم والشعار في الواجهة
 const brandHTML = s => `${s.logo_url ? `<img src="${esc(s.logo_url)}" alt="">` : ''}<span>${esc(s.site_name)}</span>`;
 const printHead = s => `<b>${esc(s.site_name)}</b>${s.tagline ? ' — ' + esc(s.tagline) : ''}<br>${[s.address, s.phone].filter(Boolean).map(esc).join(' • ')}`;
 
@@ -101,21 +96,17 @@ ctx.paint = s => {
 };
 ctx.setSettings = s => { ctx.settings = s; ctx.paint(s); };
 
-// شريط التنقل الرئيسي:
-// - أول صفحة: صفحة الاستمارة
-// - ثانياً: صفحة البحث
-// - الإعدادات المنسدلة (تتضمن الاستيراد والنسخ الاحتياطي)
+// شريط التنقل والصلاحيات لكل بوابة
 const NAV = [
   ['estmara', 'صفحة الاستمارة', renderEstmara, ['admin', 'reception']],
   ['search', 'صفحة البحث', renderSearch, ['admin', 'reception']],
-  ['visits', 'الزيارات', renderVisits, ['admin', 'doctor', 'reception']],
-  ['pharmacy', 'الصيدلية', renderPharmacy, ['admin', 'pharmacy']],
+  ['visits', 'بوابة الطبيب والكشوفات', renderVisits, ['admin', 'doctor', 'reception']],
+  ['pharmacy', 'بوابة الصيدلية', renderPharmacy, ['admin', 'pharmacy']],
+  ['reports', 'التقارير الإحصائية', renderReports, ['admin']],
+  ['employees', 'الحسابات والصلاحيات', renderEmployees, ['admin']],
   ['attendance', 'الحضور والانصراف', renderAttendance, ['admin', 'reception', 'doctor', 'pharmacy']],
-  ['reports', 'تقارير العيادة', renderReports, ['admin', 'reception', 'doctor', 'pharmacy']],
-  ['employees', 'الموظفون والحسابات', renderEmployees, ['admin']],
-  ['assets', 'العهد', renderAssets, ['admin']],
-  // عناصر الإعدادات المنسدلة:
-  ['settings', 'الإعدادات العامة', renderSettings, ['admin']],
+  ['assets', 'العهد والمستلزمات', renderAssets, ['admin']],
+  ['settings', 'البيانات التعريفية والإعدادات', renderSettings, ['admin']],
   ['import', 'الاستيراد من إكسل', renderImport, ['admin']],
   ['backup', 'النسخ الاحتياطي', renderBackup, ['admin']],
 ];
@@ -125,11 +116,10 @@ ctx.loadLookups = async () => {
     sb.from('clinics').select('*').order('sort').order('name'),
     sb.from('doctors').select('*').order('name'),
     sb.from('employees').select('id,full_name,specialty,active').eq('active', true),
-    sb.from('drugs').select('id,name,unit,min_stock').eq('active', true).order('name'),
+    sb.from('drugs').select('*').eq('active', true).order('name'),
   ]);
   ctx.clinics = c.data || [];
 
-  // دمج الأطباء من جدول doctors ومن موظفي العيادة المصنفين كأطباء
   const docMap = new Map();
   (d.data || []).forEach(doc => docMap.set(doc.name, doc));
   (emps.data || []).forEach(emp => {
@@ -143,7 +133,6 @@ ctx.loadLookups = async () => {
   ctx.drugs = g.data || [];
 };
 
-// شاشة تسجيل الدخول
 function showLogin(msg = '') {
   const logoHTML = ctx.settings.logo_url
     ? `<div class="login-logo-wrap"><img class="logo" src="${esc(ctx.settings.logo_url)}" alt="${esc(ctx.settings.site_name)}"></div>`
@@ -188,7 +177,6 @@ function showLogin(msg = '') {
   };
 }
 
-// نافذة الملف الشخصي للمستخدم ورفع الصورة
 function openProfileModal(context, user) {
   const body = openModal(`
     <div style="text-align:center; padding:.5rem 0">
@@ -232,7 +220,6 @@ function openProfileModal(context, user) {
       toast('جارٍ معالجة ورفع الصورة...', 'wait');
       const compressedDataUrl = await compressAvatar(file, 300);
 
-      // تحديث الملف الشخصي في قاعدة البيانات
       const { error } = await context.sb.from('profiles').update({
         avatar_url: compressedDataUrl
       }).eq('id', user.id);
@@ -290,21 +277,10 @@ async function boot() {
   const todayArabic = new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const isAdmin = p.role === 'admin';
 
-  // الروابط الرئيسية المعتادة
-  const mainItems = [
-    ['estmara', 'صفحة الاستمارة', renderEstmara, ['admin', 'reception']],
-    ['search', 'صفحة البحث', renderSearch, ['admin', 'reception']],
-    ['visits', 'الزيارات', renderVisits, ['admin', 'doctor', 'reception']],
-    ['pharmacy', 'الصيدلية', renderPharmacy, ['admin', 'pharmacy']],
-    ['attendance', 'الحضور والانصراف', renderAttendance, ['admin', 'reception', 'doctor', 'pharmacy']],
-    ['reports', 'تقارير العيادة', renderReports, ['admin', 'reception', 'doctor', 'pharmacy']],
-    ['employees', 'الموظفون والحسابات', renderEmployees, ['admin']],
-    ['assets', 'العهد', renderAssets, ['admin']]
-  ].filter(n => n[3].includes(p.role));
+  const mainItems = NAV.slice(0, 8).filter(n => n[3].includes(p.role));
 
   app.innerHTML = `
     <div class="shell">
-      <!-- القائمة الجانبية -->
       <nav class="side">
         <div class="brand">${brandHTML(ctx.settings)}</div>
         
@@ -312,14 +288,13 @@ async function boot() {
           ${mainItems.map(n => `<a href="#/${n[0]}" data-k="${n[0]}">${n[1]}</a>`).join('')}
 
           ${isAdmin ? `
-            <!-- قائمة الإعدادات المنسدلة: الإعدادات، الاستيراد من إكسل، والنسخ الاحتياطي -->
             <div class="nav-dropdown" id="settingsNavGroup">
               <button type="button" class="nav-dropdown-btn" id="settingsDropdownToggle">
-                <span>⚙️ الإعدادات</span>
+                <span>⚙️ الإعدادات والبيانات</span>
                 <span class="dropdown-caret">▾</span>
               </button>
               <div class="nav-dropdown-menu">
-                <a href="#/settings" data-k="settings" class="sub-link">الإعدادات العامة</a>
+                <a href="#/settings" data-k="settings" class="sub-link">البيانات التعريفية والإعدادات</a>
                 <a href="#/import" data-k="import" class="sub-link">الاستيراد من إكسل</a>
                 <a href="#/backup" data-k="backup" class="sub-link">النسخ الاحتياطي</a>
               </div>
@@ -328,9 +303,7 @@ async function boot() {
         </div>
       </nav>
 
-      <!-- العمود الرئيسي مع القائمة العلوية -->
       <div class="main-col">
-        <!-- القائمة العلوية الحديثة (Top Bar) -->
         <header class="topbar noprint">
           <div class="topbar-right">
             <span class="topbar-clinic">
@@ -341,13 +314,11 @@ async function boot() {
           </div>
 
           <div class="topbar-left">
-            <!-- زر الوضع الليلي / الفاتح بتصميم محترف وأنيق -->
             <button id="topModeBtn" class="theme-toggle-btn" title="تبديل الوضع (فاتح / ليلي / تلقائي)">
               ${themeIconHTML(curMode)}
               <span class="theme-label">${MODE_LABEL[curMode]}</span>
             </button>
 
-            <!-- بطاقة المستخدم: الصورة الشخصية، الاسم، والدور -->
             <div class="user-widget" id="userWidget" title="انقر لعرض الملف الشخصي وتغيير صورتك">
               ${avatarHTML(p)}
               <div class="user-info">
@@ -356,7 +327,6 @@ async function boot() {
               </div>
             </div>
 
-            <!-- زر تسجيل الخروج -->
             <button id="topLogoutBtn" class="topbar-logout" title="تسجيل الخروج">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
               خروج
@@ -372,7 +342,6 @@ async function boot() {
     </div>
   `;
 
-  // تبديل فتح/إغلاق القائمة المنسدلة للإعدادات
   const settingsToggle = document.getElementById('settingsDropdownToggle');
   const settingsGroup = document.getElementById('settingsNavGroup');
   if (settingsToggle && settingsGroup) {
@@ -383,7 +352,6 @@ async function boot() {
     };
   }
 
-  // تبديل الوضع الليلي والفاتح من القائمة العلوية
   const topModeBtn = document.getElementById('topModeBtn');
   topModeBtn.onclick = () => {
     const order = ['light', 'dark', 'auto'];
@@ -392,10 +360,8 @@ async function boot() {
     topModeBtn.innerHTML = `${themeIconHTML(next)}<span class="theme-label">${MODE_LABEL[next]}</span>`;
   };
 
-  // فتح الملف الشخصي ورفع الصورة
   document.getElementById('userWidget').onclick = () => openProfileModal(ctx, p);
 
-  // تسجيل الخروج
   document.getElementById('topLogoutBtn').onclick = async () => {
     await sb.auth.signOut();
     location.hash = '';
@@ -413,12 +379,10 @@ function route(items) {
   const page = items.find(n => n[0] === key) || items[0];
   if (ctx.cleanup) { ctx.cleanup(); ctx.cleanup = null; }
 
-  // تحديث تمييز الرابط النشط
   document.querySelectorAll('.side a').forEach(a => {
     a.classList.toggle('on', a.dataset.k === page[0]);
   });
 
-  // إذا كانت الصفحة ضمن قائمة الإعدادات المنسدلة (إعدادات، استيراد، نسخ احتياطي)، نفتح القائمة تلقائياً
   const group = document.getElementById('settingsNavGroup');
   if (group) {
     const isSub = ['settings', 'import', 'backup'].includes(page[0]);
