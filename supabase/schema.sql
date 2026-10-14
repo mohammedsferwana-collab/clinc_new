@@ -1,5 +1,5 @@
--- مركز الأمل الطبي — قاعدة البيانات (Supabase / PostgreSQL)
--- شغّل هذا الملف كاملاً مرة واحدة في: Supabase ← SQL Editor ← New query ← Run
+-- مركز الأمل الطبي — قاعدة البيانات الشاملة والمحدثة (Supabase / PostgreSQL)
+-- شغّل هذا الملف كاملاً في: Supabase ← SQL Editor ← New query ← Run
 
 create extension if not exists pgcrypto;
 
@@ -14,7 +14,6 @@ create table if not exists profiles (
   created_at timestamptz not null default now()
 );
 
--- أول مستخدم يُنشأ يصبح مديراً تلقائياً، والبقية «استقبال» حتى يغيّر المدير دورهم
 create or replace function handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$
 declare
@@ -45,7 +44,7 @@ language sql stable security definer set search_path = public as $$
   select role from profiles where id = auth.uid() and active
 $$;
 
--- ========== الجداول ==========
+-- ========== الجداول التعريفية (Master Data) ==========
 create table if not exists clinics (
   id serial primary key,
   name text not null unique,
@@ -81,27 +80,48 @@ create table if not exists visits (
   visit_date date not null default current_date,
   clinic text,
   doctor_name text,
-  case_type text check (case_type in ('جديد','مراجع')),
+  case_type text check (case_type in ('جديد','مراجع','استشارة','طوارئ','محول','أخرى')),
+  age_at_visit text,
   diagnosis text,
   notes text,
-  legacy_prescription text,           -- العلاج القديم المستورد كنص حر
-  status text not null default 'waiting' check (status in ('waiting','seen')),
+  legacy_prescription text,
+  status text not null default 'waiting' check (status in ('waiting','in_progress','seen')),
   source text not null default 'app',
   created_by uuid references auth.users,
   created_at timestamptz not null default now()
 );
+
+-- ترقية جدول الزيارات إن كان موجوداً مسبقاً
+ALTER TABLE visits ADD COLUMN IF NOT EXISTS age_at_visit text;
+ALTER TABLE visits DROP CONSTRAINT IF EXISTS visits_status_check;
+ALTER TABLE visits ADD CONSTRAINT visits_status_check CHECK (status IN ('waiting', 'in_progress', 'seen'));
+ALTER TABLE visits DROP CONSTRAINT IF EXISTS visits_case_type_check;
+ALTER TABLE visits ADD CONSTRAINT visits_case_type_check CHECK (case_type IN ('جديد', 'مراجع', 'استشارة', 'طوارئ', 'محول', 'أخرى'));
+
 create index if not exists visits_date_idx on visits (visit_date);
 create index if not exists visits_patient_idx on visits (patient_id, visit_date desc);
 
 create table if not exists drugs (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
+  scientific_name text,
+  dosage text,
   unit text not null default 'حبة',
+  price numeric(10,2) not null default 0,
+  supplier text,
+  expiry_date date,
   min_stock int not null default 0,
   active boolean not null default true
 );
 
-create table if not exists visit_items (        -- بنود الوصفة (يكتبها الطبيب وتصرفها الصيدلية)
+-- ترقية جدول الأدوية إن كان موجوداً مسبقاً
+ALTER TABLE drugs ADD COLUMN IF NOT EXISTS scientific_name text;
+ALTER TABLE drugs ADD COLUMN IF NOT EXISTS dosage text;
+ALTER TABLE drugs ADD COLUMN IF NOT EXISTS price numeric(10,2) NOT NULL DEFAULT 0;
+ALTER TABLE drugs ADD COLUMN IF NOT EXISTS supplier text;
+ALTER TABLE drugs ADD COLUMN IF NOT EXISTS expiry_date date;
+
+create table if not exists visit_items (
   id uuid primary key default gen_random_uuid(),
   visit_id uuid not null references visits on delete cascade,
   drug_id uuid references drugs,
@@ -119,7 +139,7 @@ create table if not exists stock_movements (
   id uuid primary key default gen_random_uuid(),
   drug_id uuid not null references drugs,
   kind text not null check (kind in ('in','out','adjust')),
-  qty int not null,                     -- in/out موجبة دائماً، adjust بإشارتها
+  qty int not null,
   movement_date date not null default current_date,
   note text,
   item_id uuid references visit_items,
@@ -129,13 +149,13 @@ create table if not exists stock_movements (
 create index if not exists movements_drug_idx on stock_movements (drug_id);
 create index if not exists movements_date_idx on stock_movements (movement_date);
 
+DROP VIEW IF EXISTS drug_balance;
 create or replace view drug_balance with (security_invoker = true) as
-select d.id, d.name, d.unit, d.min_stock, d.active,
+select d.id, d.name, d.scientific_name, d.dosage, d.unit, d.price, d.supplier, d.expiry_date, d.min_stock, d.active,
        coalesce(sum(case m.kind when 'in' then m.qty when 'out' then -m.qty else m.qty end), 0)::int as balance
 from drugs d left join stock_movements m on m.drug_id = d.id
 group by d.id;
 
--- صرف بند من الوصفة وخصمه من المخزون في خطوة واحدة (لا يمكن صرفه مرتين)
 create or replace function dispense_item(p_item uuid, p_drug uuid, p_qty int) returns void
 language plpgsql security definer set search_path = public as $$
 begin
@@ -159,7 +179,6 @@ begin
   end loop;
 end $$;
 
-drop policy if exists admin_profiles on profiles;
 drop policy if exists admin_profiles on profiles;
 create policy admin_profiles on profiles for update to authenticated
   using (id = auth.uid() or my_role() = 'admin') with check (id = auth.uid() or my_role() = 'admin');
@@ -193,11 +212,10 @@ create policy w_drugs on drugs for all to authenticated
 
 drop policy if exists i_moves on stock_movements;
 drop policy if exists d_moves on stock_movements;
+drop policy if exists u_moves on stock_movements;
 create policy i_moves on stock_movements for insert to authenticated with check (my_role() in ('admin','pharmacy'));
 create policy d_moves on stock_movements for delete to authenticated using (my_role() in ('admin','pharmacy'));
-drop policy if exists u_moves on stock_movements;
 create policy u_moves on stock_movements for update to authenticated using (my_role() in ('admin','pharmacy')) with check (my_role() in ('admin','pharmacy'));
-
 
 -- ========== دوال إدارة المستخدمين والدخول بدون بريد ==========
 create or replace function get_email_for_username(p_username text) returns text
@@ -309,7 +327,7 @@ end $$;
 grant execute on function admin_set_user_password(uuid, text) to authenticated;
 
 create or replace function admin_delete_user(p_user_id uuid) returns void
-language plpgsql security definer set search_path = auth, public as 7238
+language plpgsql security definer set search_path = auth, public as $$
 begin
   if (select role from public.profiles where id = auth.uid() and active) <> 'admin' then
     raise exception 'غير مصرح: صلاحية مدير مطلوبة';
@@ -319,7 +337,7 @@ begin
   end if;
   delete from public.employees where user_id = p_user_id;
   delete from auth.users where id = p_user_id;
-end 7238;
+end $$;
 grant execute on function admin_delete_user(uuid) to authenticated;
 
 create or replace function admin_update_user(
@@ -330,7 +348,7 @@ create or replace function admin_update_user(
   p_active boolean default true,
   p_avatar_url text default null
 ) returns void
-language plpgsql security definer set search_path = auth, public as 7238
+language plpgsql security definer set search_path = auth, public as $$
 begin
   if (select role from public.profiles where id = auth.uid() and active) <> 'admin' then
     raise exception 'غير مصرح: صلاحية مدير مطلوبة';
@@ -347,5 +365,5 @@ begin
   update auth.users
   set raw_user_meta_data = jsonb_build_object('full_name', p_full_name, 'username', lower(trim(p_username)), 'role', p_role)
   where id = p_user_id;
-end 7238;
+end $$;
 grant execute on function admin_update_user(uuid, text, text, text, boolean, text) to authenticated;
