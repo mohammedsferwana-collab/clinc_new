@@ -105,25 +105,13 @@ export async function renderSettings(root, ctx) {
           </form>
         </div>
 
-        <!-- إدارة الأطباء وحذف الأطباء الزائدين (مثل علي) -->
+        <!-- الأطباء: عرض فقط — تتم إضافتهم وتعديلهم وحذفهم من صفحة «الموظفون والحسابات» -->
         <div class="panel">
-          <div class="row between" style="margin-bottom:.4rem">
-            <h2 style="margin:0">الأطباء</h2>
-            <button type="button" class="btn sm danger" id="cleanAliBtn" title="حذف الطبيب علي والأطباء التجريبيين">حذف الأطباء الزائدين (مثل علي)</button>
-          </div>
-          <p class="muted small" style="margin:0 0 .6rem">انقر على علامة (×) لحذف أي طبيب. كما يُضاف الأطباء تلقائياً عند تسجيلهم في صفحة الموظفون كطبيب معالج.</p>
+          <h2 style="margin:0 0 .4rem">الأطباء</h2>
+          <p class="muted small" style="margin:0 0 .6rem">لا يمكن إضافة الأطباء من الإعدادات. يُضاف الطبيب من صفحة <a href="#/employees"><b>الموظفون والحسابات</b></a> بتحديد الدور «دكتور / طبيب معالج»، وتُرفق هناك شهادته الجامعية وسيرته الذاتية.</p>
           <div class="chips" id="docChips">
-            ${ctx.doctors.map(c => `
-              <span class="chip" style="display:inline-flex; align-items:center; gap:.4rem">
-                <span>${esc(c.name)}</span>
-                <button type="button" class="del-doc" data-id="${c.id}" data-name="${esc(c.name)}" style="background:none; border:none; color:var(--bad); font-weight:bold; cursor:pointer; font-size:1.1rem; line-height:1; padding:0 3px" title="حذف هذا الطبيب">×</button>
-              </span>
-            `).join('') || '<span class="muted">لا يوجد أطباء مسجلون</span>'}
+            ${ctx.doctors.map(c => `<span class="chip">${esc(c.name)}</span>`).join('') || '<span class="muted">لا يوجد أطباء مسجلون</span>'}
           </div>
-          <form class="row" data-t="doctors" style="margin-top:.8rem">
-            <input name="name" placeholder="طبيب جديد" required>
-            <button class="btn">إضافة</button>
-          </form>
         </div>
       </div>
     `;
@@ -134,37 +122,6 @@ export async function renderSettings(root, ctx) {
     const runBackup = () => executeBackup(ctx);
     root.querySelector('#backupFromSettingsTop').onclick = runBackup;
     root.querySelector('#backupFromSettingsBtn').onclick = runBackup;
-
-    // حذف طبيب فردي بالنقر على ×
-    root.querySelector('#docChips').onclick = async e => {
-      const btn = e.target.closest('.del-doc');
-      if (!btn) return;
-      const name = btn.dataset.name;
-      const id = btn.dataset.id;
-      if (!confirm(`هل أنت متأكد من حذف الطبيب «${name}» من النظام؟`)) return;
-      if (String(id).startsWith('emp_')) {
-        toast('هذا الطبيب مسجل كموظف؛ يمكنك تعديل دوره في شاشة الموظفون والحسابات', 'wait');
-        return;
-      }
-      const { error } = await sb.from('doctors').delete().eq('id', id);
-      if (error) return toast(errMsg(error), 'bad');
-      toast(`تم حذف الطبيب «${name}» بنجاح`);
-      await ctx.loadLookups();
-      draw();
-    };
-
-    // زر الحذف السريع للطبيب علي والأطباء التجريبيين
-    const cleanAliBtn = root.querySelector('#cleanAliBtn');
-    if (cleanAliBtn) {
-      cleanAliBtn.onclick = async () => {
-        if (!confirm('تأكيد حذف الطبيب «علي» والأطباء التجريبيين غير المعتمدين من قائمة الأطباء؟')) return;
-        const testNames = ['علي', 'غلي', 'ابابيل', 'احمد', 'ايمن', 'عبير'];
-        const { error } = await sb.from('doctors').delete().in('name', testNames);
-        toast(error ? errMsg(error) : 'تم حذف الطبيب علي والأطباء التجريبيين بنجاح', error ? 'bad' : 'ok');
-        await ctx.loadLookups();
-        draw();
-      };
-    }
 
     // حذف عيادة بالنقر على ×
     root.querySelector('#clinicChips').onclick = async e => {

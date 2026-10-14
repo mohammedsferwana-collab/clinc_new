@@ -3,7 +3,7 @@ import { esc, toast, openModal, closeModal, errMsg, ROLES } from './ui.js';
 import { exportBar } from './export.js';
 import { compressAvatar } from './app.js';
 
-const KIND = { id: 'صورة الهوية', certificate: 'شهادة جامعية', course: 'دورة تدريبية', other: 'أخرى' };
+const KIND = { id: 'صورة الهوية', certificate: 'الشهادة الجامعية', cv: 'السيرة الذاتية', course: 'دورة تدريبية', other: 'أخرى' };
 const BUCKET = 'employee-files';
 const hhmm = t => (t || '').slice(0, 5);
 
@@ -480,7 +480,7 @@ function openResetPasswordModal(ctx, user) {
 async function filesSection(ctx, emp, box) {
   const { sb } = ctx;
   if (!emp.id || String(emp.id).startsWith('prof_')) {
-    box.innerHTML = '<p class="muted small">يمكن رفع الوثائق والشهادات بعد حفظ بيانات الموظف.</p>';
+    box.innerHTML = '<p class="muted small">يمكن رفع الوثائق (الشهادة الجامعية، السيرة الذاتية، الدورات) بعد حفظ بيانات الموظف.</p>';
     return;
   }
 

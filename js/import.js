@@ -123,8 +123,7 @@ export function renderImport(root, ctx) {
         if (error) throw error;
         log(`إضافة الزيارات… ${(done += part.length)} / ${toAdd.length}`);
       }
-      const docs = [...new Set(toAdd.map(v => v.doctor_name).filter(Boolean))];
-      if (docs.length) await sb.from('doctors').upsert(docs.map(name => ({ name })), { onConflict: 'name', ignoreDuplicates: true });
+      // لا تُضاف أسماء الأطباء من الإكسل؛ الأطباء يُضافون فقط من «الموظفون والحسابات». يبقى اسم الطبيب مسجلاً نصاً في الزيارة.
       await ctx.loadLookups();
       log(`اكتمل الاستيراد: ${toAdd.length} زيارة جديدة، ${newPatients.length} مراجع جديد، ${dup} زيارة مكررة تم تخطيها.`);
       toast('اكتمل الاستيراد');
